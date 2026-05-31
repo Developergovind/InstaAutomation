@@ -12,6 +12,7 @@ import {
   MetaPublishResponse,
   PublishPostResult,
 } from './interfaces/meta-api.interface';
+import { MetaTokenService } from './meta-token.service';
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const IMGBB_UPLOAD_URL = 'https://api.imgbb.com/1/upload';
@@ -33,16 +34,20 @@ interface MetaApiErrorBody {
 @Injectable()
 export class InstagramService {
   private readonly logger = new Logger(InstagramService.name);
-  private readonly accessToken: string;
   private readonly businessAccountId: string;
   private readonly imgbbApiKey: string;
 
-  constructor(private readonly configService: ConfigService) {
-    this.accessToken =
-      this.configService.get<string>('instagram.accessToken') ?? '';
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly metaTokenService: MetaTokenService,
+  ) {
     this.businessAccountId =
       this.configService.get<string>('instagram.businessAccountId') ?? '';
     this.imgbbApiKey = this.configService.get<string>('imgbb.apiKey') ?? '';
+  }
+
+  private get accessToken(): string {
+    return this.metaTokenService.getAccessToken();
   }
 
   async uploadImageToImgbb(imageBuffer: Buffer): Promise<string> {

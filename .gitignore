@@ -23,7 +23,7 @@ pnpm-debug.log*
 coverage/
 .nyc_output/
 
-# Runtime / local data
+# Runtime / local data (includes cached Meta page token — keep private)
 data/
 *.pid
 *.seed
