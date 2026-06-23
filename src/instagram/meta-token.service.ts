@@ -1,10 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import axios from 'axios';
 import { CronJob } from 'cron';
 import * as fs from 'fs';
 import * as path from 'path';
+import { DynamicConfigService } from '../settings/settings.service';
 import {
   MetaAccountsResponse,
   MetaDebugTokenResponse,
@@ -23,26 +23,34 @@ const REFRESH_IF_EXPIRES_WITHIN_DAYS = 14;
 export class MetaTokenService implements OnModuleInit {
   private readonly logger = new Logger(MetaTokenService.name);
   private readonly tokenStorePath: string;
-  private readonly appId: string;
-  private readonly appSecret: string;
-  private readonly businessAccountId: string;
   private accessToken = '';
   private storedToken: StoredMetaToken | null = null;
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly dynamicConfig: DynamicConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {
-    this.appId = this.configService.get<string>('instagram.appId') ?? '';
-    this.appSecret = this.configService.get<string>('instagram.appSecret') ?? '';
-    this.businessAccountId =
-      this.configService.get<string>('instagram.businessAccountId') ?? '';
     this.tokenStorePath = path.join(process.cwd(), 'data', 'meta-token.json');
+  }
+
+  private async getAppId(): Promise<string> {
+    return this.dynamicConfig.get('meta_app_id', 'META_APP_ID');
+  }
+
+  private async getAppSecret(): Promise<string> {
+    return this.dynamicConfig.get('meta_app_secret', 'META_APP_SECRET');
+  }
+
+  private async getBusinessAccountId(): Promise<string> {
+    return this.dynamicConfig.get(
+      'instagram_business_account_id',
+      'INSTAGRAM_BUSINESS_ACCOUNT_ID',
+    );
   }
 
   async onModuleInit(): Promise<void> {
     await this.initializeToken();
-    this.registerDailyRefreshCheck();
+    await this.registerDailyRefreshCheck();
   }
 
   getAccessToken(): string {
@@ -87,7 +95,27 @@ export class MetaTokenService implements OnModuleInit {
   async refreshTokenIfNeeded(force = false): Promise<MetaTokenRefreshResult> {
     const before = this.getTokenStatus();
 
-    if (!this.appId || !this.appSecret) {
+    if (
+      !force &&
+      this.storedToken?.pageAccessToken &&
+      this.storedToken.tokenType === 'PAGE'
+    ) {
+      const pageValid = await this.isTokenValid(this.storedToken.pageAccessToken);
+      if (pageValid) {
+        this.accessToken = this.storedToken.pageAccessToken;
+        return {
+          refreshed: false,
+          before,
+          after: this.getTokenStatus(),
+          message: 'Page token active — refresh not needed',
+        };
+      }
+    }
+
+    const appId = await this.getAppId();
+    const appSecret = await this.getAppSecret();
+
+    if (!appId || !appSecret) {
       const message =
         'META_APP_ID / META_APP_SECRET missing — auto token refresh disabled';
       this.logger.warn(message);
@@ -95,8 +123,11 @@ export class MetaTokenService implements OnModuleInit {
     }
 
     const sourceToken =
+      (await this.dynamicConfig.get(
+        'instagram_access_token',
+        'INSTAGRAM_ACCESS_TOKEN',
+      )) ||
       this.storedToken?.userAccessToken ||
-      this.configService.get<string>('instagram.accessToken') ||
       this.accessToken;
 
     if (!sourceToken) {
@@ -105,13 +136,27 @@ export class MetaTokenService implements OnModuleInit {
       return { refreshed: false, before, after: before, message };
     }
 
-    const debug = await this.debugToken(sourceToken);
+    let debug: MetaDebugTokenResponse;
+    try {
+      debug = await this.debugToken(sourceToken);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Token debug failed: ${message}`);
+      return { refreshed: false, before, after: before, message };
+    }
+
+    const isValid = debug.data?.is_valid ?? false;
     const expiresAt = debug.data?.expires_at ?? 0;
-    const isNeverExpiring = expiresAt === 0;
+    const isNeverExpiring = expiresAt === 0 && isValid;
+
+    if (!force && !isValid) {
+      this.logger.warn('Stored/env token is invalid — attempting refresh');
+      force = true;
+    }
 
     if (!force && isNeverExpiring) {
       const message = 'Page token active — refresh not needed (never expires)';
-      this.logger.debug('Meta token does not expire — refresh skipped');
+      this.logger.debug(message);
       return { refreshed: false, before, after: before, message };
     }
 
@@ -125,7 +170,18 @@ export class MetaTokenService implements OnModuleInit {
     }
 
     this.logger.log('Refreshing Meta access token...');
-    await this.bootstrapFromToken(sourceToken);
+    try {
+      await this.bootstrapFromToken(sourceToken);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Token refresh failed: ${message}`);
+      return {
+        refreshed: false,
+        before,
+        after: this.getTokenStatus(),
+        message: `${message}. Get a new short-lived token from Meta Developer Console and update INSTAGRAM_ACCESS_TOKEN in .env`,
+      };
+    }
 
     const after = this.getTokenStatus();
     return {
@@ -133,24 +189,33 @@ export class MetaTokenService implements OnModuleInit {
       before,
       after,
       message: force
-        ? 'Token refresh completed (forced test refresh)'
+        ? 'Token refresh completed (forced refresh)'
         : 'Token refresh completed',
     };
   }
 
   private async initializeToken(): Promise<void> {
-    const envToken =
-      this.configService.get<string>('instagram.accessToken') ?? '';
+    const envToken = await this.dynamicConfig.get(
+      'instagram_access_token',
+      'INSTAGRAM_ACCESS_TOKEN',
+    );
+    const appId = await this.getAppId();
+    const appSecret = await this.getAppSecret();
     const cached = this.loadStoredToken();
 
     if (cached?.pageAccessToken) {
-      this.accessToken = cached.pageAccessToken;
-      this.storedToken = cached;
-      this.logger.log(
-        `Meta page token loaded from cache (updated ${cached.updatedAt})`,
-      );
-      await this.refreshTokenIfNeeded();
-      return;
+      const cachedValid = await this.isTokenValid(cached.pageAccessToken);
+      if (cachedValid) {
+        this.accessToken = cached.pageAccessToken;
+        this.storedToken = cached;
+        this.logger.log(
+          `Meta page token loaded from cache (updated ${cached.updatedAt})`,
+        );
+        await this.refreshTokenIfNeeded();
+        return;
+      }
+      this.logger.warn('Cached Meta token expired — re-bootstrapping from .env');
+      this.clearStoredToken();
     }
 
     if (!envToken) {
@@ -158,7 +223,7 @@ export class MetaTokenService implements OnModuleInit {
       return;
     }
 
-    if (!this.appId || !this.appSecret) {
+    if (!appId || !appSecret) {
       this.accessToken = envToken;
       this.logger.warn(
         'Using .env token as-is. Set META_APP_ID + META_APP_SECRET for auto refresh.',
@@ -166,7 +231,7 @@ export class MetaTokenService implements OnModuleInit {
       return;
     }
 
-    this.logger.log('Converting .env token to long-lived page token (one-time)...');
+    this.logger.log('Converting .env token to long-lived page token...');
     try {
       await this.bootstrapFromToken(envToken);
     } catch (error) {
@@ -184,7 +249,13 @@ export class MetaTokenService implements OnModuleInit {
 
     const tokenToUse = pageToken ?? longLivedUserToken;
     const debug = await this.debugToken(tokenToUse);
-    const expiresAt = debug.data?.expires_at ?? 0;
+    if (!debug.data?.is_valid) {
+      throw new Error(
+        'Token exchange produced an invalid token — update INSTAGRAM_ACCESS_TOKEN with a fresh token from Meta Developer Console',
+      );
+    }
+
+    const expiresAt = debug.data.expires_at ?? 0;
 
     this.accessToken = tokenToUse;
     this.storedToken = {
@@ -213,9 +284,16 @@ export class MetaTokenService implements OnModuleInit {
   }
 
   private async exchangeForLongLivedToken(token: string): Promise<string> {
+    const appId = await this.getAppId();
+    const appSecret = await this.getAppSecret();
     const debug = await this.debugToken(token);
-    const expiresAt = debug.data?.expires_at ?? 0;
+    if (!debug.data?.is_valid) {
+      throw new Error(
+        'INSTAGRAM_ACCESS_TOKEN is expired or invalid. Generate a new token at https://developers.facebook.com → your app → Use cases → Instagram → Generate token',
+      );
+    }
 
+    const expiresAt = debug.data.expires_at ?? 0;
     if (expiresAt === 0) {
       return token;
     }
@@ -225,8 +303,8 @@ export class MetaTokenService implements OnModuleInit {
       {
         params: {
           grant_type: 'fb_exchange_token',
-          client_id: this.appId,
-          client_secret: this.appSecret,
+          client_id: appId,
+          client_secret: appSecret,
           fb_exchange_token: token,
         },
         timeout: 30000,
@@ -238,13 +316,14 @@ export class MetaTokenService implements OnModuleInit {
       throw new Error('Meta token exchange returned no access_token');
     }
 
-    this.logger.log('Short-lived token exchanged for long-lived token (~60 days)');
+    this.logger.log('Token exchanged for long-lived token (~60 days)');
     return longLived;
   }
 
   private async fetchPageAccessToken(
     userToken: string,
   ): Promise<string | null> {
+    const businessAccountId = await this.getBusinessAccountId();
     const response = await axios.get<MetaAccountsResponse>(
       `${META_GRAPH_BASE}/me/accounts`,
       {
@@ -259,12 +338,12 @@ export class MetaTokenService implements OnModuleInit {
     const pages = response.data.data ?? [];
     const matched = pages.find(
       (page) =>
-        page.instagram_business_account?.id === this.businessAccountId,
+        page.instagram_business_account?.id === businessAccountId,
     );
 
     if (matched?.access_token) {
       this.logger.log(
-        `Page token found for Instagram account ${this.businessAccountId}` +
+        `Page token found for Instagram account ${businessAccountId}` +
           (matched.name ? ` (${matched.name})` : ''),
       );
       return matched.access_token;
@@ -280,13 +359,24 @@ export class MetaTokenService implements OnModuleInit {
     return null;
   }
 
+  private async isTokenValid(token: string): Promise<boolean> {
+    try {
+      const debug = await this.debugToken(token);
+      return debug.data?.is_valid === true;
+    } catch {
+      return false;
+    }
+  }
+
   private async debugToken(token: string): Promise<MetaDebugTokenResponse> {
+    const appId = await this.getAppId();
+    const appSecret = await this.getAppSecret();
     const response = await axios.get<MetaDebugTokenResponse>(
       `${META_GRAPH_BASE}/debug_token`,
       {
         params: {
           input_token: token,
-          access_token: `${this.appId}|${this.appSecret}`,
+          access_token: `${appId}|${appSecret}`,
         },
         timeout: 30000,
       },
@@ -315,15 +405,28 @@ export class MetaTokenService implements OnModuleInit {
     this.logger.log(`Token saved to ${this.tokenStorePath}`);
   }
 
-  private registerDailyRefreshCheck(): void {
-    if (!this.appId || !this.appSecret) {
+  private clearStoredToken(): void {
+    try {
+      if (fs.existsSync(this.tokenStorePath)) {
+        fs.unlinkSync(this.tokenStorePath);
+      }
+    } catch {
+      // ignore
+    }
+    this.storedToken = null;
+  }
+
+  private async registerDailyRefreshCheck(): Promise<void> {
+    const appId = await this.getAppId();
+    const appSecret = await this.getAppSecret();
+    if (!appId || !appSecret) {
       return;
     }
 
+    const timezone = await this.dynamicConfig.get('timezone', 'TIMEZONE', 'Asia/Kolkata');
     const job = CronJob.from({
       cronTime: REFRESH_CHECK_CRON,
-      timeZone:
-        this.configService.get<string>('schedule.timezone') ?? 'Asia/Kolkata',
+      timeZone: timezone,
       onTick: () => {
         void this.refreshTokenIfNeeded();
       },

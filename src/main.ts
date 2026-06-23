@@ -10,9 +10,14 @@ async function bootstrap(): Promise<void> {
   const configService = app.get(ConfigService);
   const port = configService.get<number>('port') ?? 3000;
   const nodeEnv = configService.get<string>('nodeEnv') ?? 'development';
+  const frontendUrl =
+    configService.get<string>('frontendUrl') ?? 'http://localhost:3001';
   const logger = new Logger('Bootstrap');
 
-  app.enableCors();
+  app.enableCors({
+    origin: frontendUrl,
+    credentials: true,
+  });
   app.setGlobalPrefix('api');
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new LoggingInterceptor());
@@ -28,6 +33,7 @@ async function bootstrap(): Promise<void> {
   logger.log(`Instagram Automation API running on port ${port}`);
   logger.log(`Environment: ${nodeEnv}`);
   logger.log(`API base URL: http://localhost:${port}/api`);
+  logger.log(`CORS origin: ${frontendUrl}`);
 }
 
 bootstrap().catch((error: unknown) => {

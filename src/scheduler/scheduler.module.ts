@@ -1,14 +1,14 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { GroqModule } from '../groq/groq.module';
-import { InstagramModule } from '../instagram/instagram.module';
-import { TrendingModule } from '../trending/trending.module';
+import { AnalyticsModule } from '../analytics/analytics.module';
+import { PostsModule } from '../posts/posts.module';
+import { SourcesModule } from '../sources/sources.module';
 import { SchedulerService } from './scheduler.service';
 
 @Module({
   imports: [
-    TrendingModule,
-    GroqModule,
-    forwardRef(() => InstagramModule),
+    SourcesModule,
+    PostsModule,
+    forwardRef(() => AnalyticsModule),
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],

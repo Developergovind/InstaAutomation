@@ -1,209 +1,102 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import axios from 'axios';
+import Groq from 'groq-sdk';
+import { NICHE_LABELS } from '../niches/niche-topics';
+import { DynamicConfigService } from '../settings/settings.service';
 import {
-  CaptionHashtagResult,
-  GroqChatCompletionResponse,
-  GroqChatMessage,
-} from './interfaces/groq-api.interface';
-
-const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
-
-const FALLBACK_TOPICS = [
-  'AI breakthroughs',
-  'Sustainable tech',
-  'Cybersecurity trends',
-  'Cloud computing',
-  'Developer tools',
-];
+  GroqContentResult,
+  TrendContentInput,
+} from './interfaces/groq.interfaces';
 
 @Injectable()
 export class GroqService {
   private readonly logger = new Logger(GroqService.name);
-  private readonly apiKey: string;
-  private readonly model: string;
-  private readonly imageApiUrl: string;
 
-  constructor(private readonly configService: ConfigService) {
-    const apiKey = this.configService.get<string>('groq.apiKey');
-    if (!apiKey) {
-      this.logger.warn('GROQ_API_KEY is not configured');
-    }
-    this.apiKey = apiKey ?? '';
-    this.model =
-      this.configService.get<string>('groq.model') ?? 'llama-3.3-70b-versatile';
-    this.imageApiUrl =
-      this.configService.get<string>('groq.imageApiUrl') ??
-      'https://image.pollinations.ai/prompt';
-  }
+  constructor(private readonly dynamicConfig: DynamicConfigService) {}
 
-  async fetchTrendingTopics(niche: string): Promise<string[]> {
-    try {
-      const prompt = `You are a social media trend analyst. List the top 5 trending topics that are popular RIGHT NOW in the ${niche} niche and would work well for Instagram posts. Use current news, social media trends, and viral content patterns. Return ONLY a valid JSON array of strings, no explanation, no markdown. Example: ["topic1","topic2","topic3","topic4","topic5"]`;
-
-      const text = await this.chat(
-        [
-          {
-            role: 'system',
-            content:
-              'You respond only with valid JSON when asked. No markdown fences.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        { temperature: 0.7 },
-      );
-
-      const topics = this.parseJsonStringArray(text);
-
-      if (topics.length > 0) {
-        return topics;
-      }
-
-      this.logger.warn('Empty topics array from Groq, using fallback');
-      return [...FALLBACK_TOPICS];
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`fetchTrendingTopics failed: ${message}`);
-      return [...FALLBACK_TOPICS];
-    }
-  }
-
-  async generateImagePrompt(topic: string): Promise<string> {
-    try {
-      const prompt = `Create a detailed, vivid image generation prompt for an Instagram post about: ${topic}. The image should be eye-catching, suitable for Instagram, visually stunning, high quality. Return ONLY the prompt text, nothing else. Max 200 words.`;
-
-      return await this.chat([{ role: 'user', content: prompt }], {
-        temperature: 0.8,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`generateImagePrompt failed: ${message}`);
-      throw error;
-    }
-  }
-
-  async generateImage(imagePrompt: string): Promise<Buffer> {
-    try {
-      const truncated = imagePrompt.slice(0, 800);
-      const encoded = encodeURIComponent(truncated);
-      const url = `${this.imageApiUrl}/${encoded}?width=1080&height=1080&nologo=true&enhance=true`;
-
-      const response = await axios.get<ArrayBuffer>(url, {
-        responseType: 'arraybuffer',
-        timeout: 120000,
-        headers: { Accept: 'image/*' },
-      });
-
-      const buffer = Buffer.from(response.data);
-      if (buffer.length === 0) {
-        throw new Error('Empty image response from image API');
-      }
-
-      this.logger.log(`Image generated (${buffer.length} bytes)`);
-      return buffer;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`generateImage failed: ${message}`);
-      throw error;
-    }
-  }
-
-  async generateCaption(topic: string): Promise<CaptionHashtagResult> {
-    try {
-      const prompt = `Write an engaging Instagram caption for a post about: ${topic}. Then provide 20 relevant hashtags (without # symbol in the array). Return ONLY valid JSON in this exact format: {"caption": "your caption here", "hashtags": ["hashtag1", "hashtag2"]}. No markdown, no explanation.`;
-
-      const text = await this.chat(
-        [
-          {
-            role: 'system',
-            content:
-              'You respond only with valid JSON when asked. No markdown fences.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        { temperature: 0.7 },
-      );
-
-      const parsed = this.parseCaptionJson(text);
-      if (parsed) {
-        return parsed;
-      }
-
-      this.logger.warn('Caption JSON parse failed, using fallback caption');
-      return {
-        caption: `Exploring the latest in ${topic}. What do you think? Drop a comment below!`,
-        hashtags: [
-          topic.replace(/\s+/g, ''),
-          'trending',
-          'instagram',
-          'viral',
-          'explore',
-        ],
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`generateCaption failed: ${message}`);
-      return {
-        caption: `Discover more about ${topic} today!`,
-        hashtags: ['trending', 'instagram', 'explorepage', 'viral'],
-      };
-    }
-  }
-
-  private async chat(
-    messages: GroqChatMessage[],
-    options?: { temperature?: number; maxTokens?: number },
-  ): Promise<string> {
-    const response = await axios.post<GroqChatCompletionResponse>(
-      GROQ_CHAT_URL,
-      {
-        model: this.model,
-        messages,
-        temperature: options?.temperature ?? 0.6,
-        max_tokens: options?.maxTokens ?? 2048,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 60000,
-      },
+  async generateContent(
+    trend: TrendContentInput,
+  ): Promise<GroqContentResult> {
+    const apiKey = await this.dynamicConfig.get('groq_api_key', 'GROQ_API_KEY');
+    const model = await this.dynamicConfig.get(
+      'groq_model',
+      'GROQ_MODEL',
+      'openai/gpt-oss-120b',
     );
 
-    if (response.data.error?.message) {
-      throw new Error(response.data.error.message);
+    if (!apiKey) {
+      throw new Error('Groq API key is not configured — set it in Settings');
     }
 
-    const content = response.data.choices?.[0]?.message?.content?.trim();
-    if (!content) {
-      throw new Error('Empty response from Groq API');
-    }
+    const groq = new Groq({ apiKey });
+    const newsTitles = trend.relatedNews
+      .slice(0, 3)
+      .map((n) => n.title)
+      .join('; ');
 
-    return content;
+    const configuredNiche = await this.dynamicConfig.get(
+      'niche',
+      'CONTENT_NICHE',
+      'general',
+    );
+    const nicheKey = trend.niche ?? configuredNiche;
+    const nicheLabel =
+      nicheKey === 'general'
+        ? 'General / broad audience'
+        : (NICHE_LABELS[nicheKey] ?? nicheKey);
+
+    const userMessage = `Real trending topic: '${trend.keyword}'. Content niche: ${nicheLabel}. Related news context: ${newsTitles || 'N/A'}. Generate Instagram content tailored to the ${nicheLabel} niche. Return ONLY valid JSON, no markdown: {"caption": "engaging caption with emojis, max 150 words", "hashtags": ["15 relevant hashtags without #"], "imagePrompt": "detailed vivid image generation prompt for an eye-catching square Instagram post about this topic in the ${nicheLabel} style, max 200 words, mention no real people's names, photorealistic or illustrative style"}`;
+
+    try {
+      return await this.requestContent(groq, model, userMessage, false);
+    } catch {
+      this.logger.warn('Groq JSON parse failed — retrying with stricter prompt');
+      return this.requestContent(
+        groq,
+        model,
+        `${userMessage}\n\nIMPORTANT: Return ONLY raw JSON. No markdown fences. No explanation.`,
+        true,
+      );
+    }
   }
 
-  private parseJsonStringArray(text: string): string[] {
-    try {
-      const cleaned = this.stripMarkdownJson(text);
-      const parsed: unknown = JSON.parse(cleaned);
+  private async requestContent(
+    groq: Groq,
+    model: string,
+    userMessage: string,
+    isRetry: boolean,
+  ): Promise<GroqContentResult> {
+    const completion = await groq.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a social media content writer. You only work with real trends provided to you — you never invent topics.',
+        },
+        { role: 'user', content: userMessage },
+      ],
+      response_format: { type: 'json_object' },
+    });
 
-      if (
-        Array.isArray(parsed) &&
-        parsed.every((item) => typeof item === 'string')
-      ) {
-        return parsed as string[];
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`JSON array parse error: ${message}`);
+    const text = completion.choices[0]?.message?.content?.trim() ?? '';
+    const parsed = this.parseContentJson(text);
+
+    if (!parsed) {
+      const message = 'Failed to parse Groq content JSON';
+      if (isRetry) throw new Error(message);
+      throw new Error(message);
     }
-    return [];
+
+    this.logger.log('Content generated for trend via Groq');
+    return parsed;
   }
 
-  private parseCaptionJson(text: string): CaptionHashtagResult | null {
+  private parseContentJson(text: string): GroqContentResult | null {
     try {
-      const cleaned = this.stripMarkdownJson(text);
+      const cleaned = text
+        .replace(/```json\s*/gi, '')
+        .replace(/```\s*/g, '')
+        .trim();
       const parsed: unknown = JSON.parse(cleaned);
 
       if (
@@ -211,26 +104,21 @@ export class GroqService {
         parsed !== null &&
         'caption' in parsed &&
         'hashtags' in parsed &&
-        typeof (parsed as CaptionHashtagResult).caption === 'string' &&
-        Array.isArray((parsed as CaptionHashtagResult).hashtags)
+        'imagePrompt' in parsed
       ) {
-        const result = parsed as CaptionHashtagResult;
+        const row = parsed as GroqContentResult;
         return {
-          caption: result.caption,
-          hashtags: result.hashtags.filter((h) => typeof h === 'string'),
+          caption: String(row.caption),
+          hashtags: Array.isArray(row.hashtags)
+            ? row.hashtags.filter((h) => typeof h === 'string').slice(0, 15)
+            : [],
+          imagePrompt: String(row.imagePrompt),
         };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Caption JSON parse error: ${message}`);
+      this.logger.warn(`Groq JSON parse error: ${message}`);
     }
     return null;
-  }
-
-  private stripMarkdownJson(text: string): string {
-    return text
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/g, '')
-      .trim();
   }
 }

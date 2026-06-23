@@ -8,11 +8,11 @@ export interface MetaPublishResponse {
 
 export interface MetaContainerStatusResponse {
   status_code?: string;
-  id?: string;
 }
 
 export interface PublishPostResult {
   success: boolean;
   postId?: string;
+  imageUrl?: string;
   error?: string;
 }

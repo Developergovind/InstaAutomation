@@ -1,112 +1,147 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { CronJob } from 'cron';
-import { GroqService } from '../groq/groq.service';
-import { InstagramService } from '../instagram/instagram.service';
-import { TrendingService } from '../trending/trending.service';
-import { ManualPostPipelineResult } from './interfaces/pipeline-result.interface';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { PostPipelineService } from '../posts/post-pipeline.service';
+import { DynamicConfigService } from '../settings/settings.service';
+import { TrendFetchService } from '../sources/trend-fetch.service';
 
-const AUTO_POST_CRON_NAME = 'auto-instagram-post';
+const CRON_TREND_FETCH = 'trend-fetch';
+const CRON_POST_GENERATION = 'post-generation';
+const CRON_ANALYTICS_FETCH = 'analytics-fetch';
 
 @Injectable()
 export class SchedulerService implements OnModuleInit {
   private readonly logger = new Logger(SchedulerService.name);
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly dynamicConfig: DynamicConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
-    private readonly trendingService: TrendingService,
-    private readonly groqService: GroqService,
-    private readonly instagramService: InstagramService,
+    private readonly trendFetchService: TrendFetchService,
+    private readonly postPipelineService: PostPipelineService,
+    private readonly analyticsService: AnalyticsService,
   ) {}
 
-  onModuleInit(): void {
-    const cronTime =
-      this.configService.get<string>('schedule.cronTime') ?? '0 9 * * *';
-    const timeZone =
-      this.configService.get<string>('schedule.timezone') ?? 'Asia/Kolkata';
+  async onModuleInit(): Promise<void> {
+    await this.registerAllJobs();
+  }
 
+  async rescheduleJobs(): Promise<void> {
+    for (const name of [
+      CRON_TREND_FETCH,
+      CRON_POST_GENERATION,
+      CRON_ANALYTICS_FETCH,
+    ]) {
+      if (this.schedulerRegistry.doesExist('cron', name)) {
+        this.schedulerRegistry.deleteCronJob(name);
+      }
+    }
+    this.dynamicConfig.invalidateCache();
+    await this.registerAllJobs();
+    this.logger.log('Cron jobs rescheduled from updated settings');
+  }
+
+  getNextRunTimes(): {
+    trendFetch: string | null;
+    postGeneration: string | null;
+    analyticsFetch: string | null;
+  } {
+    const getNext = (name: string): string | null => {
+      if (!this.schedulerRegistry.doesExist('cron', name)) return null;
+      const job = this.schedulerRegistry.getCronJob(name);
+      return job.nextDate()?.toISO() ?? null;
+    };
+    return {
+      trendFetch: getNext(CRON_TREND_FETCH),
+      postGeneration: getNext(CRON_POST_GENERATION),
+      analyticsFetch: getNext(CRON_ANALYTICS_FETCH),
+    };
+  }
+
+  private async registerAllJobs(): Promise<void> {
+    const timezone = await this.dynamicConfig.get('timezone', 'TIMEZONE', 'Asia/Kolkata');
+    const trendCron = await this.dynamicConfig.get(
+      'cron_trend_fetch',
+      'CRON_TREND_FETCH',
+      '0 */3 * * *',
+    );
+    const postCron = await this.dynamicConfig.get(
+      'cron_post_generation',
+      'CRON_POST_GENERATION',
+      '0 9,18 * * *',
+    );
+    const analyticsCron = await this.dynamicConfig.get(
+      'cron_analytics_fetch',
+      'CRON_ANALYTICS_FETCH',
+      '0 */6 * * *',
+    );
+
+    this.registerCron(CRON_TREND_FETCH, trendCron, timezone, () =>
+      this.handleTrendFetch(),
+    );
+    this.registerCron(CRON_POST_GENERATION, postCron, timezone, () =>
+      this.handlePostGeneration(),
+    );
+    this.registerCron(CRON_ANALYTICS_FETCH, analyticsCron, timezone, () =>
+      this.handleAnalyticsFetch(),
+    );
+  }
+
+  private registerCron(
+    name: string,
+    cronTime: string,
+    timeZone: string,
+    onTick: () => Promise<void>,
+  ): void {
     const job = CronJob.from({
       cronTime,
       timeZone,
       onTick: () => {
-        void this.handleAutoPost();
+        void onTick();
       },
       start: true,
     });
-
-    this.schedulerRegistry.addCronJob(AUTO_POST_CRON_NAME, job);
-
+    this.schedulerRegistry.addCronJob(name, job);
     const nextRun = job.nextDate()?.toISO() ?? 'unknown';
     this.logger.log(
-      `Auto-post cron registered: "${cronTime}" (${timeZone}). Next run: ${nextRun}`,
+      `Cron "${name}" registered: "${cronTime}" (${timeZone}). Next: ${nextRun}`,
     );
   }
 
-  async handleAutoPost(): Promise<void> {
-    this.logger.log('Cron job auto-instagram-post triggered');
-
+  async handleTrendFetch(): Promise<void> {
+    this.logger.log('Cron: trend fetch triggered');
     try {
-      const result = await this.triggerManualPost();
-      if (result.publishResult.success) {
-        this.logger.log(
-          `Auto post published successfully. Instagram ID: ${result.publishResult.postId}`,
-        );
-      } else {
-        this.logger.error(
-          `Auto post failed: ${result.publishResult.error ?? 'Unknown error'}`,
-        );
-      }
+      const result = await this.trendFetchService.fetchAndStoreAll();
+      this.logger.log(
+        `Trend fetch done: stored=${result.stored}, skipped=${result.skipped}`,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`handleAutoPost unhandled error: ${message}`);
+      this.logger.error(`Trend fetch cron failed: ${message}`);
     }
   }
 
-  async triggerManualPost(
-    topic?: string,
-    niche?: string,
-  ): Promise<ManualPostPipelineResult> {
-    const contentNiche =
-      niche ?? this.configService.get<string>('niche') ?? 'technology';
-
-    let resolvedTopic = topic;
-
+  async handlePostGeneration(): Promise<void> {
+    this.logger.log('Cron: post generation triggered');
     try {
-      if (!resolvedTopic) {
-        resolvedTopic = await this.trendingService.getTopTrend(contentNiche);
-        this.logger.log(`Using trending topic: ${resolvedTopic}`);
-      } else {
-        this.logger.log(`Using provided topic: ${resolvedTopic}`);
-      }
-
-      const imagePrompt = await this.groqService.generateImagePrompt(
-        resolvedTopic,
-      );
-      this.logger.log('Image prompt generated');
-
-      const imageBuffer = await this.groqService.generateImage(imagePrompt);
-      this.logger.log(`Image ready (${imageBuffer.length} bytes)`);
-
-      const { caption, hashtags } =
-        await this.groqService.generateCaption(resolvedTopic);
-      this.logger.log('Caption and hashtags generated');
-
-      const publishResult = await this.instagramService.publishPost(
-        imageBuffer,
-        caption,
-        hashtags,
-      );
-
-      return {
-        content: { topic: resolvedTopic, caption, hashtags },
-        publishResult,
-      };
+      const niche = await this.dynamicConfig.get('niche', 'CONTENT_NICHE', 'general');
+      this.logger.log(`Post generation using niche=${niche}`);
+      const result = await this.postPipelineService.runForTopTrend();
+      this.logger.log(`Post generation done: ${JSON.stringify(result)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`triggerManualPost pipeline failed: ${message}`);
-      throw error;
+      this.logger.error(`Post generation cron failed: ${message}`);
+    }
+  }
+
+  async handleAnalyticsFetch(): Promise<void> {
+    this.logger.log('Cron: analytics fetch triggered');
+    try {
+      const result = await this.analyticsService.fetchAndStoreAll();
+      this.logger.log(`Analytics fetch done: tracked=${result.tracked}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Analytics cron failed: ${message}`);
     }
   }
 }

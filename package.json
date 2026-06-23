@@ -1,7 +1,7 @@
 {
   "name": "instagram-automation",
-  "version": "1.0.0",
-  "description": "NestJS backend for Instagram automation with Groq AI",
+  "version": "2.1.0",
+  "description": "NestJS Instagram automation with free Google Trends/News RSS + Groq + Pollinations",
   "private": true,
   "license": "MIT",
   "scripts": {
@@ -14,21 +14,26 @@
   "dependencies": {
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.0.0",
-    "@nestjs/core": "^10.0.0",
+    "@nestjs/jwt": "^10.2.0",
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/schedule": "^4.0.0",
+    "@nestjs/typeorm": "^10.0.0",
     "axios": "^1.6.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
-    "form-data": "^4.0.0",
+    "fast-xml-parser": "^4.3.0",
+    "groq-sdk": "^0.7.0",
     "reflect-metadata": "^0.1.13",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "sql.js": "^1.10.0",
+    "typeorm": "^0.3.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
     "@nestjs/testing": "^10.0.0",
     "@types/express": "^4.17.21",
     "@types/node": "^20.0.0",
+    "@types/sql.js": "^1.4.9",
     "typescript": "^5.1.3"
   },
   "engines": {

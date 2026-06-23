@@ -1,253 +1,99 @@
 {
   "info": {
-    "_postman_id": "a1b2c3d4-instagram-automation-2026",
-    "name": "Instagram Automation API",
-    "description": "Postman collection to test the Instagram automation NestJS backend.\n\n**Setup:**\n1. Import this collection + `Instagram-Automation.local.postman_environment.json`\n2. Select the **Local** environment\n3. Start server: `npm run start:dev`\n4. Fill API keys in `.env` before running **Instagram → Trigger Post** (calls Groq + ImgBB + Meta)\n\n**Base URL:** `http://localhost:3000/api`",
+    "name": "Instagram Automation v2.1 (Groq + Pollinations)",
+    "description": "NestJS Instagram automation — Google Trends/News RSS + Groq text + Pollinations images + Meta Graph API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    {
-      "key": "baseUrl",
-      "value": "http://localhost:3000",
-      "type": "string"
-    },
-    {
-      "key": "containerId",
-      "value": "",
-      "type": "string"
-    }
+    { "key": "baseUrl", "value": "http://localhost:3000/api" }
   ],
   "item": [
     {
-      "name": "Trending",
-      "description": "Groq LLM — trending topics for your niche (`CONTENT_NICHE` in .env).",
+      "name": "Trends",
       "item": [
         {
-          "name": "Get All Trending Topics",
+          "name": "Fetch Trends (Manual)",
           "request": {
-            "method": "GET",
+            "method": "POST",
             "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/trending",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "trending"]
-            },
-            "description": "Returns all 5 trending topics for the configured niche.\n\n**Response:** `{ success, data: string[], message }`"
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('success is true', () => {",
-                  "  const json = pm.response.json();",
-                  "  pm.expect(json.success).to.eql(true);",
-                  "  pm.expect(json.data).to.be.an('array');",
-                  "});"
-                ]
-              }
-            }
-          ]
+            "url": "{{baseUrl}}/trends/fetch"
+          }
         },
         {
-          "name": "Get Top Trending Topic",
+          "name": "List Ranked Trends",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/trending/top",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "trending", "top"]
+            "url": "{{baseUrl}}/trends?limit=50"
+          }
+        },
+        {
+          "name": "Get Top Unprocessed Trend",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/trends/top"
+          }
+        },
+        {
+          "name": "Get Trend by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/trends/{{trendId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Posts",
+      "item": [
+        {
+          "name": "Publish Top Trend",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
             },
-            "description": "Returns only the #1 trending topic.\n\n**Response:** `{ success, data: { topic: string }, message }`"
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Has topic', () => {",
-                  "  const json = pm.response.json();",
-                  "  pm.expect(json.success).to.eql(true);",
-                  "  pm.expect(json.data.topic).to.be.a('string');",
-                  "});"
-                ]
-              }
-            }
-          ]
+            "url": "{{baseUrl}}/instagram/post"
+          }
+        },
+        {
+          "name": "Publish Specific Trend",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"trendId\": \"{{trendId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/instagram/post"
+          }
+        },
+        {
+          "name": "List Posts",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/posts?page=1&limit=20"
+          }
+        },
+        {
+          "name": "Get Post by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/posts/{{postId}}"
+          }
         }
       ]
     },
     {
       "name": "Instagram",
-      "description": "Full automation pipeline or Meta container status check.\n\n⚠️ **Trigger Post** uses paid/third-party APIs — run only when `.env` is configured.",
       "item": [
-        {
-          "name": "Trigger Post (auto trending topic)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/instagram/post",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "instagram", "post"]
-            },
-            "description": "Runs full pipeline:\n1. Top trending topic\n2. Image prompt + Imagen image\n3. Caption + hashtags\n4. ImgBB upload → Meta container → publish\n\n**Body:** empty `{}` — uses `CONTENT_NICHE` from .env\n\n**Response:** `{ success, data: { content, publishResult }, message }`"
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status 200 or 201', () => {",
-                  "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
-                  "});",
-                  "const json = pm.response.json();",
-                  "if (json.data && json.data.publishResult) {",
-                  "  pm.collectionVariables.set('lastPublishSuccess', String(json.data.publishResult.success));",
-                  "  if (json.data.publishResult.postId) {",
-                  "    pm.collectionVariables.set('lastInstagramPostId', json.data.publishResult.postId);",
-                  "  }",
-                  "}"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Trigger Post (custom topic)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"topic\": \"AI agents transforming work in 2026\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/instagram/post",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "instagram", "post"]
-            },
-            "description": "Same pipeline but uses your **topic** instead of trending."
-          },
-          "response": []
-        },
-        {
-          "name": "Trigger Post (custom niche)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"niche\": \"fitness\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/instagram/post",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "instagram", "post"]
-            },
-            "description": "Fetches trending from **niche** override (no custom topic)."
-          },
-          "response": []
-        },
-        {
-          "name": "Trigger Post (topic + niche)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"topic\": \"Morning workout motivation\",\n  \"niche\": \"fitness\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/instagram/post",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "instagram", "post"]
-            },
-            "description": "Uses explicit **topic**; niche is ignored when topic is provided."
-          },
-          "response": []
-        },
         {
           "name": "Check Container Status",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/instagram/status/{{containerId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "instagram", "status", "{{containerId}}"]
-            },
-            "description": "Poll Meta media container status.\n\n**Values:** `FINISHED`, `IN_PROGRESS`, `ERROR`\n\nSet `containerId` in environment/collection variables (from Meta API logs if needed)."
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Has status', () => {",
-                  "  const json = pm.response.json();",
-                  "  pm.expect(json.data.status).to.be.a('string');",
-                  "});"
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "Health Check",
-      "description": "Quick check that server is running (404 on unknown route still proves Nest is up).",
-      "item": [
-        {
-          "name": "Server Reachable (Trending)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/trending/top",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "trending", "top"]
-            },
-            "description": "Lightweight ping — only needs `GROQ_API_KEY`."
-          },
-          "response": []
+            "url": "{{baseUrl}}/instagram/status/{{containerId}}"
+          }
         }
       ]
     }

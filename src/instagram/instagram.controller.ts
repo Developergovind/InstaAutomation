@@ -1,7 +1,5 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Controller, Get, Param, Post } from '@nestjs/common';
 import { successResponse } from '../common/utils/api-response.util';
-import { SchedulerService } from '../scheduler/scheduler.service';
-import { ManualPostDto } from './dto/manual-post.dto';
 import { InstagramService } from './instagram.service';
 import { MetaTokenService } from './meta-token.service';
 
@@ -9,27 +7,8 @@ import { MetaTokenService } from './meta-token.service';
 export class InstagramController {
   constructor(
     private readonly instagramService: InstagramService,
-    private readonly schedulerService: SchedulerService,
     private readonly metaTokenService: MetaTokenService,
   ) {}
-
-  @Post('post')
-  async triggerPost(@Body() body: ManualPostDto) {
-    const result = await this.schedulerService.triggerManualPost(
-      body.topic,
-      body.niche,
-    );
-
-    return successResponse(
-      {
-        content: result.content,
-        publishResult: result.publishResult,
-      },
-      result.publishResult.success
-        ? 'Instagram post published successfully'
-        : 'Instagram post pipeline completed with errors',
-    );
-  }
 
   @Get('status/:containerId')
   async getContainerStatus(@Param('containerId') containerId: string) {
@@ -55,7 +34,7 @@ export class InstagramController {
       result,
       result.refreshed
         ? 'Meta token refreshed successfully'
-        : 'Meta token refresh skipped or not needed',
+        : 'Meta token refresh skipped or failed',
     );
   }
 }
