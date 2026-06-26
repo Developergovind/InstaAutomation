@@ -13,6 +13,8 @@ async function bootstrap(): Promise<void> {
   const nodeEnv = configService.get<string>('nodeEnv') ?? 'development';
   const allowedOrigins = configService.get<string[]>('corsOrigins') ?? [
     'http://localhost:3001',
+    'https://insta-automation-web.vercel.app/',
+    'http://13.127.12.64:3001'
   ];
   const allowVercelPreviews =
     nodeEnv === 'production' ||
