@@ -16,12 +16,17 @@ async function bootstrap(): Promise<void> {
   ];
   const allowVercelPreviews =
     nodeEnv === 'production' ||
-    process.env.CORS_ALLOW_VERCEL === 'true';
+    process.env.CORS_ALLOW_VERCEL === 'true' ||
+    process.env.CORS_ALLOW_ALL === 'true';
+  const allowAllOrigins = process.env.CORS_ALLOW_ALL === 'true';
   const logger = new Logger('Bootstrap');
 
   app.enableCors({
     origin: (origin, callback) => {
-      if (isOriginAllowed(origin, allowedOrigins, allowVercelPreviews)) {
+      if (
+        allowAllOrigins ||
+        isOriginAllowed(origin, allowedOrigins, allowVercelPreviews)
+      ) {
         callback(null, true);
         return;
       }
