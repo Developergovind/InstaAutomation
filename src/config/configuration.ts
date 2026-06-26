@@ -3,6 +3,10 @@ export default () => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   dbPath: process.env.DB_PATH || './data/instagram-automation.sqlite',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
+  corsOrigins: (process.env.CORS_ORIGINS ?? process.env.FRONTEND_URL ?? 'http://localhost:3001')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   auth: {
     jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-me',
     adminEmail: process.env.ADMIN_EMAIL || 'admin@automation.local',
