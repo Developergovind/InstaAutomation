@@ -25,8 +25,13 @@ const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const INSTAGRAM_GRAPH = 'https://graph.instagram.com';
 const INSTAGRAM_GRAPH_V21 = `${INSTAGRAM_GRAPH}/v21.0`;
 const TOKEN_REFRESH_CRON_NAME = 'meta-token-refresh';
-const REFRESH_CHECK_CRON = '0 3 * * *';
-const REFRESH_IF_EXPIRES_WITHIN_DAYS = 14;
+/** Check token twice daily */
+const REFRESH_CHECK_CRON = '0 3,15 * * *';
+/** Proactive refresh when IG long-lived token has ≤30 days left (60-day lifetime) */
+const REFRESH_IG_IF_EXPIRES_WITHIN_DAYS = 30;
+/** Proactive refresh when Facebook user token has ≤14 days left */
+const REFRESH_FB_IF_EXPIRES_WITHIN_DAYS = 14;
+const REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class MetaTokenService implements OnModuleInit {
@@ -34,6 +39,8 @@ export class MetaTokenService implements OnModuleInit {
   private readonly tokenStorePath: string;
   private accessToken = '';
   private storedToken: StoredMetaToken | null = null;
+  private refreshInProgress = false;
+  private lastRefreshAttemptMs = 0;
 
   constructor(
     private readonly dynamicConfig: DynamicConfigService,
@@ -64,6 +71,82 @@ export class MetaTokenService implements OnModuleInit {
 
   getAccessToken(): string {
     return this.accessToken;
+  }
+
+  /**
+   * Refresh the token before API calls when it is close to expiry.
+   * Safe to call frequently — debounced and no-op when token is still fresh.
+   */
+  async ensureFreshToken(): Promise<string> {
+    if (!this.accessToken && this.storedToken?.pageAccessToken) {
+      this.accessToken = this.storedToken.pageAccessToken;
+    }
+
+    if (!this.shouldRefreshSoon()) {
+      return this.accessToken;
+    }
+
+    const now = Date.now();
+    if (this.refreshInProgress || now - this.lastRefreshAttemptMs < REFRESH_COOLDOWN_MS) {
+      return this.accessToken;
+    }
+
+    this.refreshInProgress = true;
+    this.lastRefreshAttemptMs = now;
+    try {
+      const result = await this.refreshTokenIfNeeded();
+      if (result.refreshed) {
+        this.logger.log(`Auto token refresh: ${result.message}`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Auto token refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.refreshInProgress = false;
+    }
+
+    return this.accessToken;
+  }
+
+  private shouldRefreshSoon(): boolean {
+    if (!this.storedToken?.pageAccessToken) {
+      return Boolean(this.accessToken) && !this.storedToken;
+    }
+
+    if (this.storedToken.tokenType === 'PAGE' && this.storedToken.expiresAt === 0) {
+      return false;
+    }
+
+    if (this.storedToken.expiresAt <= 0) {
+      return this.storedToken.tokenType === 'INSTAGRAM_LOGIN';
+    }
+
+    const daysLeft =
+      (this.storedToken.expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24);
+
+    const threshold =
+      this.storedToken.tokenType === 'INSTAGRAM_LOGIN'
+        ? REFRESH_IG_IF_EXPIRES_WITHIN_DAYS
+        : REFRESH_FB_IF_EXPIRES_WITHIN_DAYS;
+
+    return daysLeft <= threshold;
+  }
+
+  private getRefreshThresholdDays(): number {
+    if (this.storedToken?.tokenType === 'INSTAGRAM_LOGIN') {
+      return REFRESH_IG_IF_EXPIRES_WITHIN_DAYS;
+    }
+    return REFRESH_FB_IF_EXPIRES_WITHIN_DAYS;
+  }
+
+  private async persistRefreshedToken(token: string): Promise<void> {
+    try {
+      await this.dynamicConfig.set('instagram_access_token', token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Could not persist refreshed token to settings: ${message}`);
+    }
   }
 
   /** Instagram Login (IG…) tokens must use graph.instagram.com; Facebook (EAA…) uses graph.facebook.com */
@@ -268,15 +351,18 @@ export class MetaTokenService implements OnModuleInit {
           expiresAt > 0
             ? (expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24)
             : 999;
-        if (daysLeft > REFRESH_IF_EXPIRES_WITHIN_DAYS) {
+        const threshold = REFRESH_IG_IF_EXPIRES_WITHIN_DAYS;
+        if (!force && daysLeft > threshold) {
           return {
             refreshed: false,
             before,
             after: await this.getTokenStatusDetailed(),
-            message: `Instagram token valid for ~${Math.floor(daysLeft)} more day(s)`,
+            message: `Instagram token valid for ~${Math.floor(daysLeft)} more day(s) — auto-refresh at ≤${threshold} days`,
           };
         }
-        this.logger.log('Refreshing Instagram long-lived token…');
+        this.logger.log(
+          `Instagram token expires in ~${Math.floor(daysLeft)} day(s) — refreshing now…`,
+        );
         try {
           const refreshed = await this.refreshInstagramLongLived(
             this.storedToken.pageAccessToken,
@@ -289,17 +375,36 @@ export class MetaTokenService implements OnModuleInit {
             updatedAt: new Date().toISOString(),
           };
           this.saveStoredToken(this.storedToken);
+          await this.persistRefreshedToken(refreshed);
           return {
             refreshed: true,
             before,
             after: await this.getTokenStatusDetailed(),
-            message: 'Instagram long-lived token refreshed (+60 days)',
+            message: 'Instagram long-lived token auto-refreshed (+60 days)',
           };
         } catch (error) {
           this.logger.warn(
             `Instagram token refresh failed: ${extractMetaAxiosError(error)}`,
           );
+          if (!force) {
+            return {
+              refreshed: false,
+              before,
+              after: await this.getTokenStatusDetailed(),
+              message: `Refresh failed — paste a new token from Meta before expiry (~${Math.floor(daysLeft)} days left)`,
+              requiresNewToken: daysLeft < 3,
+            };
+          }
         }
+      } else if (!force) {
+        return {
+          refreshed: false,
+          before,
+          after: { ...before, valid: false },
+          message:
+            'Instagram token expired — generate a new token in Meta Developer Console',
+          requiresNewToken: true,
+        };
       }
     }
 
@@ -402,8 +507,9 @@ export class MetaTokenService implements OnModuleInit {
 
     if (!force && expiresAt > 0) {
       const daysLeft = (expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24);
-      if (daysLeft > REFRESH_IF_EXPIRES_WITHIN_DAYS) {
-        const message = `Token valid for ~${Math.floor(daysLeft)} more day(s) — refresh skipped`;
+      const threshold = this.getRefreshThresholdDays();
+      if (daysLeft > threshold) {
+        const message = `Token valid for ~${Math.floor(daysLeft)} more day(s) — auto-refresh at ≤${threshold} days`;
         this.logger.debug(message);
         return { refreshed: false, before, after: before, message };
       }
@@ -531,6 +637,7 @@ export class MetaTokenService implements OnModuleInit {
     this.saveStoredToken(this.storedToken);
 
     if (pageToken) {
+      await this.persistRefreshedToken(pageToken);
       this.logger.log(
         'Meta page token ready — this token does not expire (no manual updates needed)',
       );
@@ -590,6 +697,7 @@ export class MetaTokenService implements OnModuleInit {
       updatedAt: new Date().toISOString(),
     };
     this.saveStoredToken(this.storedToken);
+    await this.persistRefreshedToken(longLived);
     this.logger.log(
       `Instagram Login token ready for account (expires ~${Math.floor((expiresAt * 1000 - Date.now()) / (86400000))} days)`,
     );
@@ -660,10 +768,9 @@ export class MetaTokenService implements OnModuleInit {
           timeout: 30000,
         });
         if (response.data.access_token) {
-          if (this.storedToken && response.data.expires_in) {
-            this.storedToken.expiresAt = expiresAtFromExpiresIn(
-              response.data.expires_in,
-            );
+          const expiresIn = response.data.expires_in;
+          if (this.storedToken && expiresIn) {
+            this.storedToken.expiresAt = expiresAtFromExpiresIn(expiresIn);
           }
           return response.data.access_token;
         }
@@ -679,10 +786,9 @@ export class MetaTokenService implements OnModuleInit {
             },
           );
           if (response.data.access_token) {
-            if (this.storedToken && response.data.expires_in) {
-              this.storedToken.expiresAt = expiresAtFromExpiresIn(
-                response.data.expires_in,
-              );
+            const expiresIn = response.data.expires_in;
+            if (this.storedToken && expiresIn) {
+              this.storedToken.expiresAt = expiresAtFromExpiresIn(expiresIn);
             }
             return response.data.access_token;
           }
@@ -888,7 +994,7 @@ export class MetaTokenService implements OnModuleInit {
 
     this.schedulerRegistry.addCronJob(TOKEN_REFRESH_CRON_NAME, job);
     this.logger.log(
-      `Meta token auto-refresh check scheduled daily at ${REFRESH_CHECK_CRON}`,
+      `Meta token auto-refresh scheduled (${REFRESH_CHECK_CRON}, timezone=${timezone}) — refreshes IG tokens ≤${REFRESH_IG_IF_EXPIRES_WITHIN_DAYS} days before expiry`,
     );
   }
 }

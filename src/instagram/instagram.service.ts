@@ -112,6 +112,8 @@ export class InstagramService {
     caption: string,
     hashtags: string[],
   ): Promise<PublishPostResult> {
+    await this.metaTokenService.ensureFreshToken();
+
     if (!this.metaTokenService.getAccessToken()) {
       return {
         success: false,

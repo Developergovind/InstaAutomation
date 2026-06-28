@@ -73,6 +73,8 @@ export class AnalyticsService implements OnModuleInit {
     this.syncInProgress = true;
 
     try {
+      await this.metaTokenService.ensureFreshToken();
+
       const businessAccountId = await this.dynamicConfig.get(
         'instagram_business_account_id',
         'INSTAGRAM_BUSINESS_ACCOUNT_ID',
