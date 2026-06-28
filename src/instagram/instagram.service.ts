@@ -9,7 +9,6 @@ import {
 } from './interfaces/meta-api.interface';
 import { MetaTokenService } from './meta-token.service';
 
-const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const CONTAINER_POLL_INTERVAL_MS = 3000;
 const CONTAINER_MAX_ATTEMPTS = 10;
 
@@ -35,6 +34,10 @@ export class InstagramService {
     return this.metaTokenService.getAccessToken();
   }
 
+  private graphBase(): string {
+    return this.metaTokenService.getGraphApiBase();
+  }
+
   private async getBusinessAccountId(): Promise<string> {
     return this.dynamicConfig.get(
       'instagram_business_account_id',
@@ -47,8 +50,11 @@ export class InstagramService {
     fullCaption: string,
   ): Promise<string> {
     const businessAccountId = await this.getBusinessAccountId();
+    const graph = this.graphBase();
+    this.logger.debug(`Creating media container via ${graph}`);
+
     const response = await axios.post<MetaMediaContainerResponse>(
-      `${META_GRAPH_BASE}/${businessAccountId}/media`,
+      `${graph}/${businessAccountId}/media`,
       null,
       {
         params: {
@@ -70,7 +76,7 @@ export class InstagramService {
 
   async checkContainerStatus(containerId: string): Promise<string> {
     const response = await axios.get<MetaContainerStatusResponse>(
-      `${META_GRAPH_BASE}/${containerId}`,
+      `${this.graphBase()}/${containerId}`,
       {
         params: { fields: 'status_code', access_token: this.accessToken },
         timeout: 30000,
@@ -82,7 +88,7 @@ export class InstagramService {
   async publishContainer(containerId: string): Promise<string> {
     const businessAccountId = await this.getBusinessAccountId();
     const response = await axios.post<MetaPublishResponse>(
-      `${META_GRAPH_BASE}/${businessAccountId}/media_publish`,
+      `${this.graphBase()}/${businessAccountId}/media_publish`,
       null,
       {
         params: {
@@ -120,7 +126,7 @@ export class InstagramService {
     }
 
     if (this.isTokenExpiredError(result.error)) {
-      this.logger.warn('Meta token expired (190) — refreshing and retrying...');
+      this.logger.warn('Meta token issue (190) — refreshing and retrying...');
       const refresh = await this.metaTokenService.refreshTokenIfNeeded(true);
       if (refresh.refreshed) {
         return this.runPublish(imageUrl, caption, hashtags);
@@ -129,7 +135,7 @@ export class InstagramService {
         success: false,
         error:
           refresh.message ||
-          'Token refresh failed. Paste a new EAA… token from Meta Developer Console in Settings → Access token.',
+          'Token refresh failed. Generate a fresh token in Meta Developer Console and save in Settings.',
       };
     }
 
@@ -181,6 +187,7 @@ export class InstagramService {
 
   private isTokenExpiredError(error?: string): boolean {
     if (!error) return false;
+    if (/cannot parse access token/i.test(error)) return false;
     return error.includes('code=190') || /session has expired/i.test(error);
   }
 

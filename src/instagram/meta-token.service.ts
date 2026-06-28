@@ -23,6 +23,7 @@ import {
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const INSTAGRAM_GRAPH = 'https://graph.instagram.com';
+const INSTAGRAM_GRAPH_V21 = `${INSTAGRAM_GRAPH}/v21.0`;
 const TOKEN_REFRESH_CRON_NAME = 'meta-token-refresh';
 const REFRESH_CHECK_CRON = '0 3 * * *';
 const REFRESH_IF_EXPIRES_WITHIN_DAYS = 14;
@@ -63,6 +64,21 @@ export class MetaTokenService implements OnModuleInit {
 
   getAccessToken(): string {
     return this.accessToken;
+  }
+
+  /** Instagram Login (IG…) tokens must use graph.instagram.com; Facebook (EAA…) uses graph.facebook.com */
+  getGraphApiBase(): string {
+    if (this.isInstagramLoginApi()) {
+      return INSTAGRAM_GRAPH_V21;
+    }
+    return META_GRAPH_BASE;
+  }
+
+  isInstagramLoginApi(): boolean {
+    return (
+      this.storedToken?.tokenType === 'INSTAGRAM_LOGIN' ||
+      describeTokenFormat(this.accessToken) === 'INSTAGRAM_LOGIN'
+    );
   }
 
   getTokenStatus(): MetaTokenStatus {
@@ -589,23 +605,38 @@ export class MetaTokenService implements OnModuleInit {
       access_token: shortToken,
     };
 
-    try {
-      const response = await axios.get<MetaTokenExchangeResponse>(
-        `${INSTAGRAM_GRAPH}/access_token`,
-        { params, timeout: 30000 },
-      );
-      return response.data;
-    } catch {
-      const response = await axios.post<MetaTokenExchangeResponse>(
-        `${INSTAGRAM_GRAPH}/access_token`,
-        new URLSearchParams(params).toString(),
-        {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    const urls = [
+      `${INSTAGRAM_GRAPH_V21}/access_token`,
+      `${INSTAGRAM_GRAPH}/access_token`,
+    ];
+
+    let lastError: unknown;
+    for (const url of urls) {
+      try {
+        const response = await axios.get<MetaTokenExchangeResponse>(url, {
+          params,
           timeout: 30000,
-        },
-      );
-      return response.data;
+        });
+        return response.data;
+      } catch (error) {
+        lastError = error;
+        try {
+          const response = await axios.post<MetaTokenExchangeResponse>(
+            url,
+            new URLSearchParams(params).toString(),
+            {
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              timeout: 30000,
+            },
+          );
+          return response.data;
+        } catch (postError) {
+          lastError = postError;
+        }
+      }
     }
+
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   private async refreshInstagramLongLived(
@@ -616,60 +647,82 @@ export class MetaTokenService implements OnModuleInit {
       access_token: longLivedToken,
     };
 
-    let data: MetaTokenExchangeResponse;
-    try {
-      const response = await axios.get<MetaTokenExchangeResponse>(
-        `${INSTAGRAM_GRAPH}/refresh_access_token`,
-        { params, timeout: 30000 },
-      );
-      data = response.data;
-    } catch {
-      const response = await axios.post<MetaTokenExchangeResponse>(
-        `${INSTAGRAM_GRAPH}/refresh_access_token`,
-        new URLSearchParams(params).toString(),
-        {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    const urls = [
+      `${INSTAGRAM_GRAPH_V21}/refresh_access_token`,
+      `${INSTAGRAM_GRAPH}/refresh_access_token`,
+    ];
+
+    let lastError: unknown;
+    for (const url of urls) {
+      try {
+        const response = await axios.get<MetaTokenExchangeResponse>(url, {
+          params,
           timeout: 30000,
-        },
-      );
-      data = response.data;
+        });
+        if (response.data.access_token) {
+          if (this.storedToken && response.data.expires_in) {
+            this.storedToken.expiresAt = expiresAtFromExpiresIn(
+              response.data.expires_in,
+            );
+          }
+          return response.data.access_token;
+        }
+      } catch (error) {
+        lastError = error;
+        try {
+          const response = await axios.post<MetaTokenExchangeResponse>(
+            url,
+            new URLSearchParams(params).toString(),
+            {
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              timeout: 30000,
+            },
+          );
+          if (response.data.access_token) {
+            if (this.storedToken && response.data.expires_in) {
+              this.storedToken.expiresAt = expiresAtFromExpiresIn(
+                response.data.expires_in,
+              );
+            }
+            return response.data.access_token;
+          }
+        } catch (postError) {
+          lastError = postError;
+        }
+      }
     }
 
-    if (!data.access_token) {
-      throw new Error('Instagram refresh returned no access_token');
-    }
-
-    if (this.storedToken && data.expires_in) {
-      this.storedToken.expiresAt = expiresAtFromExpiresIn(data.expires_in);
-    }
-
-    return data.access_token;
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Instagram refresh returned no access_token');
   }
 
   private async validateInstagramToken(token: string): Promise<boolean> {
     const igUserId = await this.getBusinessAccountId();
     try {
       const response = await axios.get<{ id?: string }>(
-        `${META_GRAPH_BASE}/${igUserId}`,
+        `${INSTAGRAM_GRAPH_V21}/${igUserId}`,
         {
           params: { fields: 'id,username', access_token: token },
           timeout: 30000,
         },
       );
-      return Boolean(response.data?.id);
+      if (response.data?.id) return true;
     } catch {
-      try {
-        const response = await axios.get<{ user_id?: string; id?: string }>(
-          `${INSTAGRAM_GRAPH}/v21.0/me`,
-          {
-            params: { fields: 'user_id,username', access_token: token },
-            timeout: 30000,
-          },
-        );
-        return Boolean(response.data?.user_id ?? response.data?.id);
-      } catch {
-        return false;
-      }
+      // try /me
+    }
+
+    try {
+      const response = await axios.get<{ user_id?: string; id?: string }>(
+        `${INSTAGRAM_GRAPH_V21}/me`,
+        {
+          params: { fields: 'user_id,username', access_token: token },
+          timeout: 30000,
+        },
+      );
+      return Boolean(response.data?.user_id ?? response.data?.id);
+    } catch {
+      return false;
     }
   }
 

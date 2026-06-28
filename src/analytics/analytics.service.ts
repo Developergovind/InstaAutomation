@@ -7,8 +7,6 @@ import { DynamicConfigService } from '../settings/settings.service';
 import { Post } from '../posts/entities/post.entity';
 import { Analytics } from './entities/analytics.entity';
 
-const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
-
 interface MetaMediaItem {
   id: string;
   caption?: string;
@@ -80,6 +78,7 @@ export class AnalyticsService implements OnModuleInit {
         'INSTAGRAM_BUSINESS_ACCOUNT_ID',
       );
       const accessToken = this.metaTokenService.getAccessToken();
+      const graphBase = this.metaTokenService.getGraphApiBase();
 
       if (!businessAccountId || !accessToken) {
         this.logger.warn('Instagram credentials missing — syncing from local posts only');
@@ -91,7 +90,7 @@ export class AnalyticsService implements OnModuleInit {
 
       try {
         const mediaRes = await axios.get<MetaMediaListResponse>(
-          `${META_GRAPH_BASE}/${businessAccountId}/media`,
+          `${graphBase}/${businessAccountId}/media`,
           {
             params: {
               fields:
@@ -124,7 +123,7 @@ export class AnalyticsService implements OnModuleInit {
 
       try {
         const storiesRes = await axios.get<{ data?: MetaMediaItem[] }>(
-          `${META_GRAPH_BASE}/${businessAccountId}/stories`,
+          `${graphBase}/${businessAccountId}/stories`,
           {
             params: {
               fields: 'id,media_type,timestamp',
@@ -177,10 +176,11 @@ export class AnalyticsService implements OnModuleInit {
   async syncPostByInstagramId(instagramPostId: string): Promise<void> {
     const accessToken = this.metaTokenService.getAccessToken();
     if (!accessToken) return;
+    const graphBase = this.metaTokenService.getGraphApiBase();
 
     try {
       const response = await axios.get<MetaMediaItem>(
-        `${META_GRAPH_BASE}/${instagramPostId}`,
+        `${graphBase}/${instagramPostId}`,
         {
           params: {
             fields:
@@ -198,7 +198,7 @@ export class AnalyticsService implements OnModuleInit {
       if (this.permissionWarned) {
         try {
           const response = await axios.get<MetaMediaItem>(
-            `${META_GRAPH_BASE}/${instagramPostId}`,
+            `${graphBase}/${instagramPostId}`,
             {
               params: {
                 fields:
@@ -397,10 +397,11 @@ export class AnalyticsService implements OnModuleInit {
     accessToken: string,
   ): Promise<Record<string, number>> {
     const result: Record<string, number> = {};
+    const graphBase = this.metaTokenService.getGraphApiBase();
 
     try {
       const response = await axios.get<MetaInsightsResponse>(
-        `${META_GRAPH_BASE}/${mediaId}/insights`,
+        `${graphBase}/${mediaId}/insights`,
         {
           params: {
             metric: metrics.join(','),
@@ -432,7 +433,7 @@ export class AnalyticsService implements OnModuleInit {
     for (const metric of metrics.slice(0, 3)) {
       try {
         const response = await axios.get<MetaInsightsResponse>(
-          `${META_GRAPH_BASE}/${mediaId}/insights`,
+          `${graphBase}/${mediaId}/insights`,
           {
             params: {
               metric,
