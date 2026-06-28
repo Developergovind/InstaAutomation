@@ -11,10 +11,17 @@ export class TrendsController {
   ) {}
 
   @Get()
-  async listTrends(@Query('limit') limit?: string) {
-    const parsedLimit = limit ? parseInt(limit, 10) : 50;
-    const trends = await this.trendsService.getAllRanked(parsedLimit);
-    return successResponse(trends, 'Trends retrieved successfully');
+  async listTrends(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const parsedLimit = limit ? parseInt(limit, 10) : 15;
+    const result = await this.trendsService.getAllRankedPaginated(
+      parsedPage,
+      parsedLimit,
+    );
+    return successResponse(result, 'Trends retrieved successfully');
   }
 
   @Get('top')

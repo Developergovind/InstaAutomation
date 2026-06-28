@@ -67,6 +67,34 @@ export class TrendsService {
     });
   }
 
+  async getAllRankedPaginated(
+    page = 1,
+    limit = 15,
+  ): Promise<{
+    items: Trend[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(Math.max(1, limit), 100);
+
+    const [items, total] = await this.trendRepo.findAndCount({
+      order: { finalScore: 'DESC', createdAt: 'DESC' },
+      skip: (safePage - 1) * safeLimit,
+      take: safeLimit,
+    });
+
+    return {
+      items,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    };
+  }
+
   async markProcessed(id: string): Promise<void> {
     await this.trendRepo.update(id, { processed: true });
   }
