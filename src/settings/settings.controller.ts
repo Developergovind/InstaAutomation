@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Inject, Put, forwardRef } from '@nestjs/common';
 import { NICHE_LABELS } from '../niches/niche-topics';
+import { MetaTokenService } from '../instagram/meta-token.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { successResponse } from '../common/utils/api-response.util';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
@@ -18,6 +19,8 @@ export class SettingsController {
     private readonly dynamicConfig: DynamicConfigService,
     @Inject(forwardRef(() => SchedulerService))
     private readonly schedulerService: SchedulerService,
+    @Inject(forwardRef(() => MetaTokenService))
+    private readonly metaTokenService: MetaTokenService,
   ) {}
 
   @Get()
@@ -37,6 +40,9 @@ export class SettingsController {
       if (typeof value === 'string') {
         await this.dynamicConfig.set(key, value);
         if (CRON_KEYS.has(key)) cronChanged = true;
+        if (key === 'instagram_access_token') {
+          await this.metaTokenService.applyAccessToken(value);
+        }
       }
     }
 

@@ -106,6 +106,14 @@ export class InstagramService {
     caption: string,
     hashtags: string[],
   ): Promise<PublishPostResult> {
+    if (!this.metaTokenService.getAccessToken()) {
+      return {
+        success: false,
+        error:
+          'No valid Meta access token. Save your IG… token from Meta → Instagram → Generate token in Settings.',
+      };
+    }
+
     const result = await this.runPublish(imageUrl, caption, hashtags);
     if (result.success) {
       return result;
@@ -121,7 +129,7 @@ export class InstagramService {
         success: false,
         error:
           refresh.message ||
-          'Token refresh failed. Update INSTAGRAM_ACCESS_TOKEN in .env with a fresh token from Meta Developer Console.',
+          'Token refresh failed. Paste a new EAA… token from Meta Developer Console in Settings → Access token.',
       };
     }
 

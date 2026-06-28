@@ -35,7 +35,7 @@ export class DynamicConfigService {
       return this.cache.get(key) ?? '';
     }
     const envKey = envFallbackKey ?? ENV_FALLBACK_MAP[key];
-    if (envKey && !this.hasDbSettings()) {
+    if (envKey) {
       const envVal = this.envConfig.get<string>(envKey);
       if (envVal) return envVal;
     }
@@ -84,10 +84,6 @@ export class DynamicConfigService {
     this.cacheLoaded = false;
     this.dbHasRows = false;
     this.cache.clear();
-  }
-
-  private hasDbSettings(): boolean {
-    return this.dbHasRows;
   }
 
   private async ensureCacheLoaded(): Promise<void> {

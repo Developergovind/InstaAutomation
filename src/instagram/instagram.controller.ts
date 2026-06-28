@@ -1,5 +1,6 @@
-import { Controller, Get, Param, Post } from '@nestjs/common';
+import { Controller, Get, Param, Post, Body } from '@nestjs/common';
 import { successResponse } from '../common/utils/api-response.util';
+import { BootstrapTokenDto } from './dto/bootstrap-token.dto';
 import { InstagramService } from './instagram.service';
 import { MetaTokenService } from './meta-token.service';
 
@@ -20,10 +21,21 @@ export class InstagramController {
   }
 
   @Get('token-status')
-  getTokenStatus() {
+  async getTokenStatus() {
     return successResponse(
-      this.metaTokenService.getTokenStatus(),
+      await this.metaTokenService.getTokenStatusDetailed(),
       'Meta token status retrieved successfully',
+    );
+  }
+
+  @Post('token-bootstrap')
+  async bootstrapToken(@Body() body: BootstrapTokenDto) {
+    const result = await this.metaTokenService.applyAccessToken(body.accessToken);
+    return successResponse(
+      result,
+      result.refreshed
+        ? 'Meta token bootstrapped successfully'
+        : 'Meta token bootstrap failed',
     );
   }
 

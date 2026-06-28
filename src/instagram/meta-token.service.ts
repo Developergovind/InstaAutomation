@@ -6,6 +6,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DynamicConfigService } from '../settings/settings.service';
 import {
+  assertUsableAccessToken,
+  describeTokenFormat,
+  expiresAtFromExpiresIn,
+  extractMetaAxiosError,
+  sanitizeAccessToken,
+} from './meta-token.util';
+import {
   MetaAccountsResponse,
   MetaDebugTokenResponse,
   MetaTokenExchangeResponse,
@@ -15,6 +22,7 @@ import {
 } from './interfaces/meta-token.interface';
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v21.0';
+const INSTAGRAM_GRAPH = 'https://graph.instagram.com';
 const TOKEN_REFRESH_CRON_NAME = 'meta-token-refresh';
 const REFRESH_CHECK_CRON = '0 3 * * *';
 const REFRESH_IF_EXPIRES_WITHIN_DAYS = 14;
@@ -67,7 +75,7 @@ export class MetaTokenService implements OnModuleInit {
         neverExpires: false,
         updatedAt: null,
         message: this.accessToken
-          ? 'Token loaded from env only (not yet persisted)'
+          ? 'Token loaded but not exchanged yet — call token refresh or paste a new token in Settings'
           : 'No token configured',
       };
     }
@@ -92,8 +100,192 @@ export class MetaTokenService implements OnModuleInit {
     };
   }
 
+  async getTokenStatusDetailed(): Promise<MetaTokenStatus> {
+    const base = this.getTokenStatus();
+    const token = this.accessToken;
+    if (!token) return { ...base, valid: false, message: 'No token configured' };
+
+    const appId = await this.getAppId();
+    const appSecret = await this.getAppSecret();
+    if (!appId || !appSecret) {
+      return {
+        ...base,
+        message:
+          'META_APP_ID / META_APP_SECRET missing — set in Settings or .env for auto exchange',
+      };
+    }
+
+    try {
+      if (this.storedToken?.tokenType === 'INSTAGRAM_LOGIN') {
+        const valid = await this.validateInstagramToken(token);
+        const expiresAt = this.storedToken.expiresAt;
+        const expiresInDays =
+          expiresAt > 0
+            ? Math.floor(
+                (expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24),
+              )
+            : null;
+
+        return {
+          valid,
+          tokenType: 'INSTAGRAM_LOGIN',
+          expiresAt: expiresAt || null,
+          expiresInDays,
+          neverExpires: false,
+          updatedAt: this.storedToken.updatedAt,
+          message: valid
+            ? `Instagram Login token valid — expires in ~${expiresInDays ?? '?'} day(s)`
+            : 'Instagram token expired — click Generate token in Meta Developer Console and save in Settings',
+        };
+      }
+
+      const debug = await this.debugToken(token);
+      const isValid = debug.data?.is_valid === true;
+      const expiresAt = debug.data?.expires_at ?? 0;
+      const neverExpires = isValid && expiresAt === 0;
+      const expiresInDays =
+        neverExpires || expiresAt <= 0
+          ? null
+          : Math.floor(
+              (expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24),
+            );
+
+      return {
+        valid: isValid,
+        tokenType: this.storedToken?.tokenType ?? debug.data?.type ?? 'UNKNOWN',
+        expiresAt: neverExpires ? null : expiresAt || null,
+        expiresInDays,
+        neverExpires,
+        updatedAt: this.storedToken?.updatedAt ?? null,
+        message: isValid
+          ? neverExpires
+            ? 'Token valid — does not expire (page token)'
+            : `Token valid — expires in ~${expiresInDays ?? 0} day(s)`
+          : 'Token expired or invalid — generate a new token in Meta Developer Console and save in Settings',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ...base, valid: false, message: `Token check failed: ${message}` };
+    }
+  }
+
+  async applyAccessToken(inputToken: string): Promise<MetaTokenRefreshResult> {
+    const before = await this.getTokenStatusDetailed();
+    let trimmed: string;
+    try {
+      trimmed = sanitizeAccessToken(inputToken);
+      assertUsableAccessToken(trimmed);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.accessToken = '';
+      return {
+        refreshed: false,
+        before,
+        after: { ...before, valid: false, message },
+        message,
+        requiresNewToken: true,
+      };
+    }
+
+    const appId = await this.getAppId();
+    const appSecret = await this.getAppSecret();
+    if (!appId || !appSecret) {
+      this.accessToken = trimmed;
+      return {
+        refreshed: false,
+        before,
+        after: await this.getTokenStatusDetailed(),
+        message:
+          'Token saved in memory only — set META_APP_ID and META_APP_SECRET to exchange for a long-lived page token',
+        requiresNewToken: false,
+      };
+    }
+
+    this.clearStoredToken();
+    this.logger.log('Bootstrapping Meta token from new access token…');
+    try {
+      await this.bootstrapFromToken(trimmed);
+      await this.dynamicConfig.set('instagram_access_token', trimmed);
+      const after = await this.getTokenStatusDetailed();
+      return {
+        refreshed: true,
+        before,
+        after,
+        message: after.neverExpires
+          ? 'Page token ready — does not expire'
+          : after.tokenType === 'INSTAGRAM_LOGIN'
+            ? 'Instagram long-lived token saved (~60 days)'
+            : 'Long-lived token saved successfully',
+      };
+    } catch (error) {
+      const message = extractMetaAxiosError(error);
+      this.accessToken = '';
+      return {
+        refreshed: false,
+        before,
+        after: {
+          ...(await this.getTokenStatusDetailed()),
+          valid: false,
+          message,
+        },
+        message,
+        requiresNewToken: true,
+      };
+    }
+  }
+
   async refreshTokenIfNeeded(force = false): Promise<MetaTokenRefreshResult> {
-    const before = this.getTokenStatus();
+    const before = await this.getTokenStatusDetailed();
+
+    if (
+      !force &&
+      this.storedToken?.tokenType === 'INSTAGRAM_LOGIN' &&
+      this.storedToken.pageAccessToken
+    ) {
+      const valid = await this.validateInstagramToken(
+        this.storedToken.pageAccessToken,
+      );
+      if (valid) {
+        this.accessToken = this.storedToken.pageAccessToken;
+        const expiresAt = this.storedToken.expiresAt;
+        const daysLeft =
+          expiresAt > 0
+            ? (expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24)
+            : 999;
+        if (daysLeft > REFRESH_IF_EXPIRES_WITHIN_DAYS) {
+          return {
+            refreshed: false,
+            before,
+            after: await this.getTokenStatusDetailed(),
+            message: `Instagram token valid for ~${Math.floor(daysLeft)} more day(s)`,
+          };
+        }
+        this.logger.log('Refreshing Instagram long-lived token…');
+        try {
+          const refreshed = await this.refreshInstagramLongLived(
+            this.storedToken.pageAccessToken,
+          );
+          this.accessToken = refreshed;
+          this.storedToken = {
+            ...this.storedToken,
+            pageAccessToken: refreshed,
+            userAccessToken: refreshed,
+            updatedAt: new Date().toISOString(),
+          };
+          this.saveStoredToken(this.storedToken);
+          return {
+            refreshed: true,
+            before,
+            after: await this.getTokenStatusDetailed(),
+            message: 'Instagram long-lived token refreshed (+60 days)',
+          };
+        } catch (error) {
+          this.logger.warn(
+            `Instagram token refresh failed: ${extractMetaAxiosError(error)}`,
+          );
+        }
+      }
+    }
 
     if (
       !force &&
@@ -106,7 +298,7 @@ export class MetaTokenService implements OnModuleInit {
         return {
           refreshed: false,
           before,
-          after: this.getTokenStatus(),
+          after: await this.getTokenStatusDetailed(),
           message: 'Page token active — refresh not needed',
         };
       }
@@ -122,27 +314,59 @@ export class MetaTokenService implements OnModuleInit {
       return { refreshed: false, before, after: before, message };
     }
 
-    const sourceToken =
+    const sourceToken = sanitizeAccessToken(
       (await this.dynamicConfig.get(
         'instagram_access_token',
         'INSTAGRAM_ACCESS_TOKEN',
       )) ||
-      this.storedToken?.userAccessToken ||
-      this.accessToken;
+        this.storedToken?.userAccessToken ||
+        this.accessToken,
+    );
 
     if (!sourceToken) {
       const message = 'No Meta token available to refresh';
       this.logger.warn(message);
-      return { refreshed: false, before, after: before, message };
+      return { refreshed: false, before, after: before, message, requiresNewToken: true };
+    }
+
+    const tokenKind = describeTokenFormat(sourceToken);
+    if (tokenKind === 'INSTAGRAM_LOGIN') {
+      this.logger.log('Bootstrapping Instagram Login token…');
+      if (force) this.clearStoredToken();
+      try {
+        await this.bootstrapFromInstagramToken(sourceToken);
+        const after = await this.getTokenStatusDetailed();
+        return {
+          refreshed: true,
+          before,
+          after,
+          message: 'Instagram long-lived token ready (~60 days)',
+        };
+      } catch (error) {
+        const message = extractMetaAxiosError(error);
+        return {
+          refreshed: false,
+          before,
+          after: { ...before, valid: false, message },
+          message,
+          requiresNewToken: true,
+        };
+      }
     }
 
     let debug: MetaDebugTokenResponse;
     try {
       debug = await this.debugToken(sourceToken);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = extractMetaAxiosError(error);
       this.logger.error(`Token debug failed: ${message}`);
-      return { refreshed: false, before, after: before, message };
+      return {
+        refreshed: false,
+        before,
+        after: { ...before, valid: false, message },
+        message,
+        requiresNewToken: true,
+      };
     }
 
     const isValid = debug.data?.is_valid ?? false;
@@ -170,20 +394,25 @@ export class MetaTokenService implements OnModuleInit {
     }
 
     this.logger.log('Refreshing Meta access token...');
+    if (force) {
+      this.clearStoredToken();
+    }
     try {
       await this.bootstrapFromToken(sourceToken);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Token refresh failed: ${message}`);
+      const after = await this.getTokenStatusDetailed();
       return {
         refreshed: false,
         before,
-        after: this.getTokenStatus(),
-        message: `${message}. Get a new short-lived token from Meta Developer Console and update INSTAGRAM_ACCESS_TOKEN in .env`,
+        after: { ...after, valid: false },
+        message: `${message}. Generate a new token at Meta Developer Console → your app → Instagram → Generate token, then save it in Settings.`,
+        requiresNewToken: true,
       };
     }
 
-    const after = this.getTokenStatus();
+    const after = await this.getTokenStatusDetailed();
     return {
       refreshed: true,
       before,
@@ -195,10 +424,11 @@ export class MetaTokenService implements OnModuleInit {
   }
 
   private async initializeToken(): Promise<void> {
-    const envToken = await this.dynamicConfig.get(
+    const rawToken = await this.dynamicConfig.get(
       'instagram_access_token',
       'INSTAGRAM_ACCESS_TOKEN',
     );
+    const envToken = rawToken ? sanitizeAccessToken(rawToken) : '';
     const appId = await this.getAppId();
     const appSecret = await this.getAppSecret();
     const cached = this.loadStoredToken();
@@ -214,37 +444,54 @@ export class MetaTokenService implements OnModuleInit {
         await this.refreshTokenIfNeeded();
         return;
       }
-      this.logger.warn('Cached Meta token expired — re-bootstrapping from .env');
+      this.logger.warn('Cached Meta token expired — re-bootstrapping from config');
       this.clearStoredToken();
     }
 
     if (!envToken) {
-      this.logger.error('INSTAGRAM_ACCESS_TOKEN is not set in .env');
+      this.logger.error('INSTAGRAM_ACCESS_TOKEN is not set in Settings or .env');
+      return;
+    }
+
+    try {
+      assertUsableAccessToken(envToken);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(message);
+      this.accessToken = '';
       return;
     }
 
     if (!appId || !appSecret) {
-      this.accessToken = envToken;
-      this.logger.warn(
-        'Using .env token as-is. Set META_APP_ID + META_APP_SECRET for auto refresh.',
+      this.logger.error(
+        'META_APP_ID and META_APP_SECRET required — cannot use Instagram token without app credentials',
       );
+      this.accessToken = '';
       return;
     }
 
-    this.logger.log('Converting .env token to long-lived page token...');
+    this.logger.log('Converting access token to long-lived token…');
     try {
       await this.bootstrapFromToken(envToken);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.accessToken = envToken;
+      const message = extractMetaAxiosError(error);
+      this.accessToken = '';
       this.logger.error(
-        `Token bootstrap failed: ${message}. Using .env token as fallback.`,
+        `Token bootstrap failed: ${message}. Generate a new token in Meta → Instagram → Generate token, then save in Settings.`,
       );
     }
   }
 
   private async bootstrapFromToken(inputToken: string): Promise<void> {
-    const longLivedUserToken = await this.exchangeForLongLivedToken(inputToken);
+    const token = sanitizeAccessToken(inputToken);
+    const kind = assertUsableAccessToken(token);
+
+    if (kind === 'INSTAGRAM_LOGIN') {
+      await this.bootstrapFromInstagramToken(token);
+      return;
+    }
+
+    const longLivedUserToken = await this.exchangeForLongLivedToken(token);
     const pageToken = await this.fetchPageAccessToken(longLivedUserToken);
 
     const tokenToUse = pageToken ?? longLivedUserToken;
@@ -280,6 +527,149 @@ export class MetaTokenService implements OnModuleInit {
         `Could not fetch page token. Using user token (~${days ?? '?'} days). ` +
           'Ensure Instagram is linked to a Facebook Page.',
       );
+    }
+  }
+
+  private async bootstrapFromInstagramToken(inputToken: string): Promise<void> {
+    const appSecret = await this.getAppSecret();
+    if (!appSecret) {
+      throw new Error('META_APP_SECRET missing — required for Instagram token exchange');
+    }
+
+    let longLived = inputToken;
+    let expiresAt = 0;
+
+    try {
+      const exchanged = await this.exchangeInstagramLongLived(inputToken);
+      if (exchanged.access_token) {
+        longLived = exchanged.access_token;
+        if (exchanged.expires_in) {
+          expiresAt = expiresAtFromExpiresIn(exchanged.expires_in);
+        }
+        this.logger.log('Instagram short-lived token exchanged for long-lived (~60 days)');
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Long-lived exchange failed (${extractMetaAxiosError(error)}) — validating token as-is`,
+      );
+    }
+
+    const valid = await this.validateInstagramToken(longLived);
+    if (!valid) {
+      throw new Error(
+        'Instagram token invalid or expired. In Meta Developer Console → Instagram → API setup with Instagram login → Generate token, then paste here.',
+      );
+    }
+
+    if (expiresAt === 0) {
+      expiresAt = expiresAtFromExpiresIn(60 * 24 * 60 * 60);
+    }
+
+    this.accessToken = longLived;
+    this.storedToken = {
+      pageAccessToken: longLived,
+      userAccessToken: inputToken,
+      expiresAt,
+      tokenType: 'INSTAGRAM_LOGIN',
+      updatedAt: new Date().toISOString(),
+    };
+    this.saveStoredToken(this.storedToken);
+    this.logger.log(
+      `Instagram Login token ready for account (expires ~${Math.floor((expiresAt * 1000 - Date.now()) / (86400000))} days)`,
+    );
+  }
+
+  private async exchangeInstagramLongLived(
+    shortToken: string,
+  ): Promise<MetaTokenExchangeResponse> {
+    const appSecret = await this.getAppSecret();
+    const params = {
+      grant_type: 'ig_exchange_token',
+      client_secret: appSecret,
+      access_token: shortToken,
+    };
+
+    try {
+      const response = await axios.get<MetaTokenExchangeResponse>(
+        `${INSTAGRAM_GRAPH}/access_token`,
+        { params, timeout: 30000 },
+      );
+      return response.data;
+    } catch {
+      const response = await axios.post<MetaTokenExchangeResponse>(
+        `${INSTAGRAM_GRAPH}/access_token`,
+        new URLSearchParams(params).toString(),
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 30000,
+        },
+      );
+      return response.data;
+    }
+  }
+
+  private async refreshInstagramLongLived(
+    longLivedToken: string,
+  ): Promise<string> {
+    const params = {
+      grant_type: 'ig_refresh_token',
+      access_token: longLivedToken,
+    };
+
+    let data: MetaTokenExchangeResponse;
+    try {
+      const response = await axios.get<MetaTokenExchangeResponse>(
+        `${INSTAGRAM_GRAPH}/refresh_access_token`,
+        { params, timeout: 30000 },
+      );
+      data = response.data;
+    } catch {
+      const response = await axios.post<MetaTokenExchangeResponse>(
+        `${INSTAGRAM_GRAPH}/refresh_access_token`,
+        new URLSearchParams(params).toString(),
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 30000,
+        },
+      );
+      data = response.data;
+    }
+
+    if (!data.access_token) {
+      throw new Error('Instagram refresh returned no access_token');
+    }
+
+    if (this.storedToken && data.expires_in) {
+      this.storedToken.expiresAt = expiresAtFromExpiresIn(data.expires_in);
+    }
+
+    return data.access_token;
+  }
+
+  private async validateInstagramToken(token: string): Promise<boolean> {
+    const igUserId = await this.getBusinessAccountId();
+    try {
+      const response = await axios.get<{ id?: string }>(
+        `${META_GRAPH_BASE}/${igUserId}`,
+        {
+          params: { fields: 'id,username', access_token: token },
+          timeout: 30000,
+        },
+      );
+      return Boolean(response.data?.id);
+    } catch {
+      try {
+        const response = await axios.get<{ user_id?: string; id?: string }>(
+          `${INSTAGRAM_GRAPH}/v21.0/me`,
+          {
+            params: { fields: 'user_id,username', access_token: token },
+            timeout: 30000,
+          },
+        );
+        return Boolean(response.data?.user_id ?? response.data?.id);
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -360,6 +750,9 @@ export class MetaTokenService implements OnModuleInit {
   }
 
   private async isTokenValid(token: string): Promise<boolean> {
+    if (describeTokenFormat(token) === 'INSTAGRAM_LOGIN') {
+      return this.validateInstagramToken(token);
+    }
     try {
       const debug = await this.debugToken(token);
       return debug.data?.is_valid === true;
@@ -371,17 +764,24 @@ export class MetaTokenService implements OnModuleInit {
   private async debugToken(token: string): Promise<MetaDebugTokenResponse> {
     const appId = await this.getAppId();
     const appSecret = await this.getAppSecret();
-    const response = await axios.get<MetaDebugTokenResponse>(
-      `${META_GRAPH_BASE}/debug_token`,
-      {
-        params: {
-          input_token: token,
-          access_token: `${appId}|${appSecret}`,
+    if (!appId || !appSecret) {
+      throw new Error('META_APP_ID / META_APP_SECRET missing');
+    }
+    try {
+      const response = await axios.get<MetaDebugTokenResponse>(
+        `${META_GRAPH_BASE}/debug_token`,
+        {
+          params: {
+            input_token: sanitizeAccessToken(token),
+            access_token: `${appId}|${appSecret}`,
+          },
+          timeout: 30000,
         },
-        timeout: 30000,
-      },
-    );
-    return response.data;
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(extractMetaAxiosError(error));
+    }
   }
 
   private loadStoredToken(): StoredMetaToken | null {

@@ -2,7 +2,7 @@ export interface StoredMetaToken {
   pageAccessToken: string;
   userAccessToken: string;
   expiresAt: number;
-  tokenType: 'PAGE' | 'USER';
+  tokenType: 'PAGE' | 'USER' | 'INSTAGRAM_LOGIN';
   updatedAt: string;
 }
 
@@ -48,4 +48,5 @@ export interface MetaTokenRefreshResult {
   before: MetaTokenStatus;
   after: MetaTokenStatus;
   message: string;
+  requiresNewToken?: boolean;
 }
