@@ -25,6 +25,15 @@ export class Post {
   @Column('text')
   imagePrompt!: string;
 
+  @Column({ nullable: true })
+  headlineText?: string;
+
+  @Column({ nullable: true })
+  hook?: string;
+
+  @Column('simple-json', { nullable: true })
+  keyPoints?: string[];
+
   @Column({ type: 'text', nullable: true })
   imageUrl!: string | null;
 
@@ -36,6 +45,9 @@ export class Post {
 
   @Column({ type: 'text', nullable: true })
   errorMessage!: string | null;
+
+  @Column({ nullable: true })
+  layout?: string;
 
   @CreateDateColumn()
   createdAt!: Date;

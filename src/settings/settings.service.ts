@@ -31,13 +31,14 @@ export class DynamicConfigService {
     defaultValue?: string,
   ): Promise<string> {
     await this.ensureCacheLoaded();
-    if (this.cache.has(key)) {
-      return this.cache.get(key) ?? '';
+    const cachedVal = this.cache.get(key);
+    if (cachedVal && cachedVal.trim() !== '') {
+      return cachedVal;
     }
     const envKey = envFallbackKey ?? ENV_FALLBACK_MAP[key];
     if (envKey) {
       const envVal = this.envConfig.get<string>(envKey);
-      if (envVal) return envVal;
+      if (envVal && envVal.trim() !== '') return envVal;
     }
     return defaultValue ?? DEFAULT_VALUES[key] ?? '';
   }

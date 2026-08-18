@@ -3,10 +3,10 @@ import { IsOptional, IsString } from 'class-validator';
 export class UpdateSettingsDto {
   @IsOptional() @IsString() groq_api_key?: string;
   @IsOptional() @IsString() groq_model?: string;
-  @IsOptional() @IsString() pollinations_base_url?: string;
-  @IsOptional() @IsString() pollinations_model?: string;
-  @IsOptional() @IsString() pollinations_width?: string;
-  @IsOptional() @IsString() pollinations_height?: string;
+  @IsOptional() @IsString() cluster_api_key?: string;
+  @IsOptional() @IsString() cluster_model?: string;
+  @IsOptional() @IsString() cluster_size?: string;
+  @IsOptional() @IsString() imgbb_api_key?: string;
   @IsOptional() @IsString() instagram_access_token?: string;
   @IsOptional() @IsString() instagram_business_account_id?: string;
   @IsOptional() @IsString() meta_app_id?: string;

@@ -15,6 +15,7 @@ export class GoogleNewsService {
   private readonly parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
+    processEntities: false,
   });
 
   async fetchByTopicSection(

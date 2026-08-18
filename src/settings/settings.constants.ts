@@ -2,17 +2,17 @@ export const SECRET_SETTING_KEYS = new Set([
   'groq_api_key',
   'instagram_access_token',
   'meta_app_secret',
-  'pollinations_api_key',
+  'cluster_api_key',
+  'imgbb_api_key',
 ]);
 
 export const ENV_FALLBACK_MAP: Record<string, string> = {
   groq_api_key: 'GROQ_API_KEY',
   groq_model: 'GROQ_MODEL',
-  pollinations_base_url: 'POLLINATIONS_BASE_URL',
-  pollinations_model: 'POLLINATIONS_MODEL',
-  pollinations_width: 'POLLINATIONS_WIDTH',
-  pollinations_height: 'POLLINATIONS_HEIGHT',
-  pollinations_api_key: 'POLLINATIONS_API_KEY',
+  cluster_api_key: 'CLUSTER_API_KEY',
+  cluster_model: 'CLUSTER_MODEL',
+  cluster_size: 'CLUSTER_SIZE',
+  imgbb_api_key: 'IMGBB_API_KEY',
   instagram_access_token: 'INSTAGRAM_ACCESS_TOKEN',
   instagram_business_account_id: 'INSTAGRAM_BUSINESS_ACCOUNT_ID',
   meta_app_id: 'META_APP_ID',
@@ -29,10 +29,8 @@ export const ENV_FALLBACK_MAP: Record<string, string> = {
 
 export const DEFAULT_VALUES: Record<string, string> = {
   groq_model: 'openai/gpt-oss-120b',
-  pollinations_base_url: 'https://image.pollinations.ai/prompt',
-  pollinations_model: 'flux',
-  pollinations_width: '1080',
-  pollinations_height: '1080',
+  cluster_model: 'flux-2-max',
+  cluster_size: '1024x1024',
   trends_geo: 'IN',
   news_lang: 'en-IN',
   news_country: 'IN',

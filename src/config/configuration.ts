@@ -14,12 +14,10 @@ export default () => ({
   },
   // Legacy env fallbacks — DynamicConfigService reads these when DB has no value
   groq: { apiKey: process.env.GROQ_API_KEY, model: process.env.GROQ_MODEL },
-  pollinations: {
-    baseUrl: process.env.POLLINATIONS_BASE_URL || process.env.IMAGE_API_URL,
-    apiKey: process.env.POLLINATIONS_API_KEY,
-    model: process.env.POLLINATIONS_MODEL,
-    width: process.env.POLLINATIONS_WIDTH,
-    height: process.env.POLLINATIONS_HEIGHT,
+  cluster: {
+    apiKey: process.env.CLUSTER_API_KEY,
+    model: process.env.CLUSTER_MODEL || 'flux-2-max',
+    size: process.env.CLUSTER_SIZE || '1024x1024',
   },
   instagram: {
     accessToken: process.env.INSTAGRAM_ACCESS_TOKEN,

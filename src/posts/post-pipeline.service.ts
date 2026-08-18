@@ -4,10 +4,11 @@ import { DynamicConfigService } from '../settings/settings.service';
 import { TrendFetchService } from '../sources/trend-fetch.service';
 import { GroqService } from '../groq/groq.service';
 import { InstagramService } from '../instagram/instagram.service';
-import { PollinationsService } from '../pollinations/pollinations.service';
+import { ClusterService } from '../cluster/cluster.service';
 import { TrendsService } from '../trends/trends.service';
 import { Trend } from '../trends/entities/trend.entity';
 import { PostsService } from './posts.service';
+import { ImageComposerService } from '../image-composer/image-composer.service';
 
 export interface PipelineResult {
   success: boolean;
@@ -25,9 +26,10 @@ export class PostPipelineService {
     private readonly postsService: PostsService,
     private readonly dynamicConfig: DynamicConfigService,
     private readonly groqService: GroqService,
-    private readonly pollinationsService: PollinationsService,
+    private readonly clusterService: ClusterService,
     private readonly instagramService: InstagramService,
     private readonly analyticsService: AnalyticsService,
+    private readonly imageComposerService: ImageComposerService,
   ) {}
 
   async runForTopTrend(): Promise<PipelineResult> {
@@ -106,14 +108,28 @@ export class PostPipelineService {
       await this.postsService.updatePost(post.id, {
         caption: content.caption,
         hashtags: content.hashtags,
-        imagePrompt: content.imagePrompt,
+        layout: content.layout,
+        headlineText: content.headline,
+        hook: content.subheadline || content.lessonTitle || '',
+        imagePrompt: `Layout: ${content.layout}`,
         status: 'generating',
       });
 
-      const { publicUrl } = await this.pollinationsService.generateImage(
-        content.imagePrompt,
-      );
+      // Compose final image with Sharp
+      const finalImageBuffer = await this.imageComposerService.composeInfographic({
+        ...content,
+        niche: trend.niche,
+      });
 
+      // Upload to ImgBB to get a public URL for Meta API
+      const publicUrl = await this.instagramService.uploadToImgbb(finalImageBuffer);
+
+      // Save public URL in DB immediately so it's not lost on publish failures
+      await this.postsService.updatePost(post.id, {
+        imageUrl: publicUrl,
+      });
+
+      // Publish to Instagram
       const publishResult = await this.instagramService.publishPost(
         publicUrl,
         content.caption,

@@ -122,6 +122,12 @@ export class InstagramService {
       };
     }
 
+    // Wait and verify the URL is ready and reachable
+    const verified = await this.verifyImageUrl(imageUrl);
+    if (!verified) {
+      this.logger.warn(`Could not verify accessibility of image URL: ${imageUrl}`);
+    }
+
     const result = await this.runPublish(imageUrl, caption, hashtags);
     if (result.success) {
       return result;
@@ -131,6 +137,7 @@ export class InstagramService {
       this.logger.warn('Meta token issue (190) — refreshing and retrying...');
       const refresh = await this.metaTokenService.refreshTokenIfNeeded(true);
       if (refresh.refreshed) {
+        await this.verifyImageUrl(imageUrl);
         return this.runPublish(imageUrl, caption, hashtags);
       }
       return {
@@ -142,6 +149,25 @@ export class InstagramService {
     }
 
     return result;
+  }
+
+  private async verifyImageUrl(url: string): Promise<boolean> {
+    this.logger.log(`Verifying availability of image URL: ${url}`);
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const res = await axios.head(url, { timeout: 10000 });
+        const contentType = String(res.headers['content-type'] || '');
+        if (res.status === 200 && contentType.startsWith('image/')) {
+          this.logger.log(`Verified image URL is ready and accessible: ${url} (${contentType})`);
+          return true;
+        }
+        this.logger.warn(`Verify image URL attempt ${attempt} returned status ${res.status} with content-type ${contentType}`);
+      } catch (err: any) {
+        this.logger.warn(`Verify image URL attempt ${attempt} failed: ${err.message}`);
+      }
+      await this.delay(2000);
+    }
+    return false;
   }
 
   private async runPublish(
@@ -185,6 +211,47 @@ export class InstagramService {
       this.logger.error(`publishPost failed: ${message}`);
       return { success: false, error: message };
     }
+  }
+
+  async uploadToImgbb(imageBuffer: Buffer): Promise<string> {
+    const apiKey = await this.dynamicConfig.get('imgbb_api_key', 'IMGBB_API_KEY');
+    if (!apiKey) {
+      throw new Error('IMGBB_API_KEY is not configured.');
+    }
+    const base64 = imageBuffer.toString('base64');
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const params = new URLSearchParams();
+        params.append('image', base64);
+
+        const res = await axios.post<{ data: { url: string } }>(
+          `https://api.imgbb.com/1/upload?key=${apiKey}`,
+          params,
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            timeout: 30000,
+          },
+        );
+
+        const url = res.data?.data?.url;
+        if (!url) {
+          throw new Error('ImgBB did not return a public URL in response');
+        }
+        const cleanUrl = url.replace(/^https?:\/\//i, '');
+        const proxiedUrl = `https://i1.wp.com/${cleanUrl}`;
+        this.logger.log(`Proxied ImgBB URL through Jetpack: ${proxiedUrl}`);
+        return proxiedUrl;
+      } catch (err: any) {
+        if (attempt === 3) {
+          throw new Error(`ImgBB upload failed: ${err.message}`);
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+    throw new Error('ImgBB upload failed after retries');
   }
 
   private isTokenExpiredError(error?: string): boolean {
