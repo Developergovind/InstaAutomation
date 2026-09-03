@@ -1,99 +1,790 @@
 {
   "info": {
-    "name": "Instagram Automation v2.1 (Groq + Pollinations)",
-    "description": "NestJS Instagram automation — Google Trends/News RSS + Groq text + Pollinations images + Meta Graph API",
+    "name": "Instagram Automation API (v2.0 - Complete)",
+    "_postman_id": "4c7cdcc2-2e10-4cc3-8b48-57965acc5840",
+    "description": "Comprehensive Postman collection for the Instagram Automation API.\n\n### Features\n- **Authentication**: JWT Login & Token Validation with automated session saving\n- **Dashboard**: Real-time stats & overview of trends, posts, and analytics\n- **Trends Management**: Scrape and rank trends from Google Trends and Google News RSS\n- **Post Generation & Publishing**: End-to-end AI workflow (Groq text generation + ClusterProtocol/Pollinations image composition + Meta Graph API Instagram Publishing)\n- **Instagram Token Management**: Token health inspector, token bootstrapping & token refresh\n- **Analytics Insights**: Sync and view post engagement metrics (impressions, reach, likes, comments)\n- **Dynamic Settings & Niches**: Configure API keys, niches, cron schedules, and timezones\n\n### Instructions\n1. Set your environment to **Instagram Automation - Local**.\n2. Run **Auth -> 1. Admin Login** first. The collection automatically saves the returned JWT `authToken` to your environment.\n3. All subsequent requests automatically inherit the `authToken`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{authToken}}",
+        "type": "string"
+      }
+    ]
+  },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3000/api" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api",
+      "type": "string"
+    }
   ],
   "item": [
     {
-      "name": "Trends",
+      "name": "1. Authentication",
+      "description": "JWT-based authentication for administrative dashboard and operations.",
       "item": [
         {
-          "name": "Fetch Trends (Manual)",
+          "name": "1. Admin Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200/201\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data && jsonData.data.accessToken) {",
+                  "    pm.environment.set(\"authToken\", jsonData.data.accessToken);",
+                  "    console.log(\"Saved authToken to environment successfully\");",
+                  "} else if (jsonData && jsonData.accessToken) {",
+                  "    pm.environment.set(\"authToken\", jsonData.accessToken);",
+                  "    console.log(\"Saved authToken to environment successfully\");",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
+            "auth": {
+              "type": "noauth"
+            },
             "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Logs in with the admin credentials configured in `.env` (default: admin@automation.local / Admin@12345). Auto-saves the returned JWT token to `authToken`."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Get Current User Profile (Validate Session)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/trends/fetch"
-          }
-        },
-        {
-          "name": "List Ranked Trends",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/trends?limit=50"
-          }
-        },
-        {
-          "name": "Get Top Unprocessed Trend",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/trends/top"
-          }
-        },
-        {
-          "name": "Get Trend by ID",
-          "request": {
-            "method": "GET",
-            "url": "{{baseUrl}}/trends/{{trendId}}"
-          }
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Verifies the current JWT token session and returns user email and role."
+          },
+          "response": []
         }
       ]
     },
     {
-      "name": "Posts",
+      "name": "2. Dashboard",
+      "description": "Endpoints providing aggregated metrics and system overview.",
       "item": [
         {
-          "name": "Publish Top Trend",
+          "name": "1. Get Dashboard Overview",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "pm.test(\"Response contains overview data\", function () {",
+                  "    pm.expect(jsonData).to.have.property('data');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/dashboard/overview",
+              "host": ["{{baseUrl}}"],
+              "path": ["dashboard", "overview"]
+            },
+            "description": "Returns counts of total trends, posts created, published posts, failed posts, top performing post, and recent activity."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Trends",
+      "description": "Fetch, rank, and inspect trending topics from Google Trends and Google News RSS.",
+      "item": [
+        {
+          "name": "1. Fetch Trends (Manual Scrape)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200/201\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trends/fetch",
+              "host": ["{{baseUrl}}"],
+              "path": ["trends", "fetch"]
+            },
+            "description": "Triggers immediate fetching and scoring of trends from Google Trends RSS and Google News RSS for the configured region/niche."
+          },
+          "response": []
+        },
+        {
+          "name": "2. List Ranked Trends (Paginated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data) {",
+                  "    var list = Array.isArray(jsonData.data) ? jsonData.data : jsonData.data.trends || jsonData.data.items || [];",
+                  "    if (list.length > 0 && list[0].id) {",
+                  "        pm.environment.set(\"trendId\", list[0].id);",
+                  "        console.log(\"Saved trendId: \" + list[0].id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trends?page=1&limit=15",
+              "host": ["{{baseUrl}}"],
+              "path": ["trends"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Page number"
+                },
+                {
+                  "key": "limit",
+                  "value": "15",
+                  "description": "Items per page"
+                }
+              ]
+            },
+            "description": "Retrieves ranked trends ordered by score. Automatically saves the top item's `id` to the `trendId` environment variable."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Get Top Unprocessed Trend",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data && jsonData.data.id) {",
+                  "    pm.environment.set(\"trendId\", jsonData.data.id);",
+                  "    console.log(\"Saved top trendId: \" + jsonData.data.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trends/top",
+              "host": ["{{baseUrl}}"],
+              "path": ["trends", "top"]
+            },
+            "description": "Returns the highest ranked trend that has not yet been processed into an Instagram post."
+          },
+          "response": []
+        },
+        {
+          "name": "4. Get Trend by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trends/{{trendId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["trends", "{{trendId}}"]
+            },
+            "description": "Retrieves detailed information about a single trend by UUID."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Posts & Publishing",
+      "description": "Generate AI content, composite branded templates, and publish to Instagram.",
+      "item": [
+        {
+          "name": "1. Trigger Post Pipeline (Top Trend)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200/201\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data) {",
+                  "    if (jsonData.data.postId) {",
+                  "        pm.environment.set(\"postId\", jsonData.data.postId);",
+                  "    } else if (jsonData.data.post && jsonData.data.post.id) {",
+                  "        pm.environment.set(\"postId\", jsonData.data.post.id);",
+                  "    }",
+                  "    if (jsonData.data.mediaId) {",
+                  "        pm.environment.set(\"lastInstagramPostId\", jsonData.data.mediaId);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{}"
             },
-            "url": "{{baseUrl}}/instagram/post"
-          }
+            "url": {
+              "raw": "{{baseUrl}}/instagram/post",
+              "host": ["{{baseUrl}}"],
+              "path": ["instagram", "post"]
+            },
+            "description": "Executes the full pipeline for the top unprocessed trend:\n1. Groq generates post copywriting (headline, slide content, caption, hashtags)\n2. Canvas Image Composer builds branded 1080x1350 card with layout & visual accents\n3. Meta Graph API creates Instagram media container and publishes post."
+          },
+          "response": []
         },
         {
-          "name": "Publish Specific Trend",
+          "name": "2. Trigger Post Pipeline (Specific Trend)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200/201\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data) {",
+                  "    if (jsonData.data.postId) {",
+                  "        pm.environment.set(\"postId\", jsonData.data.postId);",
+                  "    } else if (jsonData.data.post && jsonData.data.post.id) {",
+                  "        pm.environment.set(\"postId\", jsonData.data.post.id);",
+                  "    }",
+                  "    if (jsonData.data.mediaId) {",
+                  "        pm.environment.set(\"lastInstagramPostId\", jsonData.data.mediaId);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"trendId\": \"{{trendId}}\"\n}"
             },
-            "url": "{{baseUrl}}/instagram/post"
-          }
+            "url": {
+              "raw": "{{baseUrl}}/instagram/post",
+              "host": ["{{baseUrl}}"],
+              "path": ["instagram", "post"]
+            },
+            "description": "Runs the full AI generation and Instagram publish pipeline for a specific `trendId`."
+          },
+          "response": []
         },
         {
-          "name": "List Posts",
+          "name": "3. List Posts (Paginated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data) {",
+                  "    var posts = Array.isArray(jsonData.data) ? jsonData.data : (jsonData.data.posts || jsonData.data.items || []);",
+                  "    if (posts.length > 0 && posts[0].id) {",
+                  "        pm.environment.set(\"postId\", posts[0].id);",
+                  "        console.log(\"Saved postId: \" + posts[0].id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "GET",
-            "url": "{{baseUrl}}/posts?page=1&limit=20"
-          }
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Page number"
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Items per page"
+                }
+              ]
+            },
+            "description": "Retrieves post history including status (published/failed), image URLs, captions, hashtags, and Instagram media IDs. Auto-saves first post ID to `postId`."
+          },
+          "response": []
         },
         {
-          "name": "Get Post by ID",
+          "name": "4. Get Post by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "GET",
-            "url": "{{baseUrl}}/posts/{{postId}}"
-          }
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/posts/{{postId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["posts", "{{postId}}"]
+            },
+            "description": "Retrieves a single generated post record with complete details (captions, slide layout, error logs if failed, etc.)."
+          },
+          "response": []
         }
       ]
     },
     {
-      "name": "Instagram",
+      "name": "5. Instagram & Meta API",
+      "description": "Meta Graph API token status, bootstrapping, refresh, and container status.",
       "item": [
         {
-          "name": "Check Container Status",
+          "name": "1. Get Meta Token Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "GET",
-            "url": "{{baseUrl}}/instagram/status/{{containerId}}"
-          }
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/instagram/token-status",
+              "host": ["{{baseUrl}}"],
+              "path": ["instagram", "token-status"]
+            },
+            "description": "Checks validity, days remaining, expiration timestamp, scopes, and target Instagram Business Account ID."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Bootstrap Meta Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200/201\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accessToken\": \"{{metaAccessTokenToBootstrap}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/instagram/token-bootstrap",
+              "host": ["{{baseUrl}}"],
+              "path": ["instagram", "token-bootstrap"]
+            },
+            "description": "Exchanges a short-lived user/page token from Meta Graph API Explorer into a 60-day long-lived token and persists it to dynamic settings."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Force Refresh Meta Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200/201\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/instagram/token-refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["instagram", "token-refresh"]
+            },
+            "description": "Forces long-lived token refresh via Meta's `oauth/access_token?grant_type=fb_exchange_token` endpoint."
+          },
+          "response": []
+        },
+        {
+          "name": "4. Check Container Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/instagram/status/{{containerId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["instagram", "status", "{{containerId}}"]
+            },
+            "description": "Queries Meta Graph API for status of an asynchronous media container creation (`FINISHED`, `IN_PROGRESS`, `ERROR`, `EXPIRED`)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Analytics & Insights",
+      "description": "Fetch and query Instagram post engagement metrics (impressions, reach, likes, comments).",
+      "item": [
+        {
+          "name": "1. Fetch Analytics from Instagram (Sync)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200/201\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/analytics/fetch",
+              "host": ["{{baseUrl}}"],
+              "path": ["analytics", "fetch"]
+            },
+            "description": "Syncs performance metrics from Meta Graph API for published posts and saves them into the analytics database."
+          },
+          "response": []
+        },
+        {
+          "name": "2. List Analytics Records",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data) {",
+                  "    var items = Array.isArray(jsonData.data) ? jsonData.data : (jsonData.data.items || []);",
+                  "    if (items.length > 0 && items[0].mediaId) {",
+                  "        pm.environment.set(\"mediaId\", items[0].mediaId);",
+                  "        console.log(\"Saved mediaId: \" + items[0].mediaId);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/analytics?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["analytics"],
+              "query": [
+                {
+                  "key": "mediaType",
+                  "value": "IMAGE",
+                  "description": "Filter by media type (e.g. IMAGE, CAROUSEL_ALBUM, VIDEO)",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max results to return"
+                }
+              ]
+            },
+            "description": "Retrieves stored analytics performance records. Auto-saves first item's `mediaId`."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Get Analytics by Media ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/analytics/{{mediaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["analytics", "{{mediaId}}"]
+            },
+            "description": "Retrieves analytics and metrics (likes, comments, impressions, reach, saved, shares) for a specific Instagram `mediaId`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7. Settings & Configuration",
+      "description": "Read and update dynamic configuration keys, API keys, cron expressions, and niches.",
+      "item": [
+        {
+          "name": "1. Get Dynamic Settings (Masked)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/settings",
+              "host": ["{{baseUrl}}"],
+              "path": ["settings"]
+            },
+            "description": "Retrieves all runtime settings with API keys and secrets securely masked."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Update Settings",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"groq_model\": \"openai/gpt-oss-120b\",\n  \"cluster_model\": \"flux-2-max\",\n  \"cluster_size\": \"1024x1024\",\n  \"niche\": \"technology\",\n  \"trends_geo\": \"IN\",\n  \"news_lang\": \"en-IN\",\n  \"news_country\": \"IN\",\n  \"cron_trend_fetch\": \"0 */3 * * *\",\n  \"cron_post_generation\": \"0 9,18 * * *\",\n  \"cron_analytics_fetch\": \"0 */6 * * *\",\n  \"timezone\": \"Asia/Kolkata\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settings",
+              "host": ["{{baseUrl}}"],
+              "path": ["settings"]
+            },
+            "description": "Updates configuration values in SQLite. Reschedules cron jobs automatically if cron expressions or timezone change."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Get Available Niches",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/settings/niches",
+              "host": ["{{baseUrl}}"],
+              "path": ["settings", "niches"]
+            },
+            "description": "Returns list of all available topic niches supported by the automation system (technology, entertainment, sports, business, health, science, etc.)."
+          },
+          "response": []
         }
       ]
     }

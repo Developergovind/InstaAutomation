@@ -10,7 +10,7 @@ import {
 import { MetaTokenService } from './meta-token.service';
 
 const CONTAINER_POLL_INTERVAL_MS = 3000;
-const CONTAINER_MAX_ATTEMPTS = 10;
+const CONTAINER_MAX_ATTEMPTS = 15;
 
 interface MetaApiErrorBody {
   error?: {
@@ -51,7 +51,7 @@ export class InstagramService {
   ): Promise<string> {
     const businessAccountId = await this.getBusinessAccountId();
     const graph = this.graphBase();
-    this.logger.debug(`Creating media container via ${graph}`);
+    this.logger.debug(`Creating image media container via ${graph}`);
 
     const response = await axios.post<MetaMediaContainerResponse>(
       `${graph}/${businessAccountId}/media`,
@@ -122,13 +122,13 @@ export class InstagramService {
       };
     }
 
-    // Wait and verify the URL is ready and reachable
+    // Verify image URL is reachable
     const verified = await this.verifyImageUrl(imageUrl);
     if (!verified) {
       this.logger.warn(`Could not verify accessibility of image URL: ${imageUrl}`);
     }
 
-    const result = await this.runPublish(imageUrl, caption, hashtags);
+    const result = await this.runPublishSingle(imageUrl, caption, hashtags);
     if (result.success) {
       return result;
     }
@@ -137,8 +137,7 @@ export class InstagramService {
       this.logger.warn('Meta token issue (190) — refreshing and retrying...');
       const refresh = await this.metaTokenService.refreshTokenIfNeeded(true);
       if (refresh.refreshed) {
-        await this.verifyImageUrl(imageUrl);
-        return this.runPublish(imageUrl, caption, hashtags);
+        return this.runPublishSingle(imageUrl, caption, hashtags);
       }
       return {
         success: false,
@@ -151,26 +150,7 @@ export class InstagramService {
     return result;
   }
 
-  private async verifyImageUrl(url: string): Promise<boolean> {
-    this.logger.log(`Verifying availability of image URL: ${url}`);
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        const res = await axios.head(url, { timeout: 10000 });
-        const contentType = String(res.headers['content-type'] || '');
-        if (res.status === 200 && contentType.startsWith('image/')) {
-          this.logger.log(`Verified image URL is ready and accessible: ${url} (${contentType})`);
-          return true;
-        }
-        this.logger.warn(`Verify image URL attempt ${attempt} returned status ${res.status} with content-type ${contentType}`);
-      } catch (err: any) {
-        this.logger.warn(`Verify image URL attempt ${attempt} failed: ${err.message}`);
-      }
-      await this.delay(2000);
-    }
-    return false;
-  }
-
-  private async runPublish(
+  private async runPublishSingle(
     imageUrl: string,
     caption: string,
     hashtags: string[],
@@ -179,38 +159,55 @@ export class InstagramService {
       const fullCaption = this.buildFullCaption(caption, hashtags);
       const containerId = await this.uploadImageContainer(imageUrl, fullCaption);
 
-      let status = await this.checkContainerStatus(containerId);
-      let attempts = 0;
-
-      while (status !== 'FINISHED' && attempts < CONTAINER_MAX_ATTEMPTS) {
-        if (status === 'ERROR') {
-          return {
-            success: false,
-            error: 'Media container processing failed with ERROR status',
-          };
-        }
-        attempts++;
-        this.logger.log(
-          `Container ${containerId} status: ${status} (poll ${attempts}/${CONTAINER_MAX_ATTEMPTS})`,
-        );
-        await this.delay(CONTAINER_POLL_INTERVAL_MS);
-        status = await this.checkContainerStatus(containerId);
-      }
-
-      if (status !== 'FINISHED') {
-        return {
-          success: false,
-          error: `Container not ready after ${CONTAINER_MAX_ATTEMPTS} polls. Last status: ${status}`,
-        };
-      }
-
+      await this.waitForContainer(containerId);
       const postId = await this.publishContainer(containerId);
       return { success: true, postId, imageUrl };
     } catch (error) {
       const message = this.extractMetaError(error);
-      this.logger.error(`publishPost failed: ${message}`);
+      this.logger.error(`Single post publish failed: ${message}`);
       return { success: false, error: message };
     }
+  }
+
+  private async waitForContainer(containerId: string): Promise<void> {
+    let status = await this.checkContainerStatus(containerId);
+    let attempts = 0;
+
+    while (status !== 'FINISHED' && attempts < CONTAINER_MAX_ATTEMPTS) {
+      if (status === 'ERROR') {
+        throw new Error(`Media container ${containerId} failed with ERROR status`);
+      }
+      attempts++;
+      this.logger.log(
+        `Container ${containerId} status: ${status} (poll ${attempts}/${CONTAINER_MAX_ATTEMPTS})`,
+      );
+      await this.delay(CONTAINER_POLL_INTERVAL_MS);
+      status = await this.checkContainerStatus(containerId);
+    }
+
+    if (status !== 'FINISHED') {
+      throw new Error(
+        `Container ${containerId} not ready after ${CONTAINER_MAX_ATTEMPTS} polls. Status: ${status}`,
+      );
+    }
+  }
+
+  private async verifyImageUrl(url: string): Promise<boolean> {
+    this.logger.log(`Verifying availability of image URL: ${url}`);
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const res = await axios.head(url, { timeout: 10000 });
+        const contentType = String(res.headers['content-type'] || '');
+        if (res.status === 200 && contentType.startsWith('image/')) {
+          this.logger.log(`Verified image URL is ready: ${url} (${contentType})`);
+          return true;
+        }
+      } catch (err: any) {
+        this.logger.warn(`Verify image URL attempt ${attempt} failed: ${err.message}`);
+      }
+      await this.delay(2000);
+    }
+    return false;
   }
 
   async uploadToImgbb(imageBuffer: Buffer): Promise<string> {
@@ -240,10 +237,8 @@ export class InstagramService {
         if (!url) {
           throw new Error('ImgBB did not return a public URL in response');
         }
-        const cleanUrl = url.replace(/^https?:\/\//i, '');
-        const proxiedUrl = `https://i1.wp.com/${cleanUrl}`;
-        this.logger.log(`Proxied ImgBB URL through Jetpack: ${proxiedUrl}`);
-        return proxiedUrl;
+        this.logger.log(`Direct ImgBB URL obtained: ${url}`);
+        return url;
       } catch (err: any) {
         if (attempt === 3) {
           throw new Error(`ImgBB upload failed: ${err.message}`);

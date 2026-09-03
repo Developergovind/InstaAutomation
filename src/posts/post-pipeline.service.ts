@@ -99,6 +99,7 @@ export class PostPipelineService {
     });
 
     try {
+      // 1. Generate copywriting, headline lines, AI image prompt & detailed caption
       const content = await this.groqService.generateContent({
         keyword: trend.keyword,
         niche: trend.niche,
@@ -108,28 +109,38 @@ export class PostPipelineService {
       await this.postsService.updatePost(post.id, {
         caption: content.caption,
         hashtags: content.hashtags,
-        layout: content.layout,
-        headlineText: content.headline,
-        hook: content.subheadline || content.lessonTitle || '',
-        imagePrompt: `Layout: ${content.layout}`,
+        layout: 'VIRAL_NEWS_CARD',
+        headlineText: [content.headlineLine1, content.headlineLine2, content.headlineLine3]
+          .filter(Boolean)
+          .join(' '),
+        hook: content.headlineLine1 || '',
+        imagePrompt: content.imagePrompt || `Visual for ${trend.keyword}`,
         status: 'generating',
       });
 
-      // Compose final image with Sharp
+      // 2. Generate stunning AI visual via ClusterProtocol / Flux (with Pollinations fallback)
+      const bgBuffer = await this.clusterService.generateBackgroundImage(
+        content.imagePrompt || `Cinematic 3D render representing ${trend.keyword}`,
+        trend.niche,
+      );
+
+      // 3. Compose high-impact single news card with Sharp
       const finalImageBuffer = await this.imageComposerService.composeInfographic({
         ...content,
         niche: trend.niche,
+        backgroundBuffer: bgBuffer,
       });
 
-      // Upload to ImgBB to get a public URL for Meta API
+      // 4. Upload to ImgBB to get a direct public URL for Meta API
       const publicUrl = await this.instagramService.uploadToImgbb(finalImageBuffer);
 
-      // Save public URL in DB immediately so it's not lost on publish failures
+      // Save public URL in DB immediately
       await this.postsService.updatePost(post.id, {
         imageUrl: publicUrl,
       });
 
-      // Publish to Instagram
+      // 5. Publish to Instagram
+      this.logger.log('Publishing single viral news card post to Instagram...');
       const publishResult = await this.instagramService.publishPost(
         publicUrl,
         content.caption,
@@ -144,7 +155,7 @@ export class PostPipelineService {
           publishedAt: new Date(),
         });
         await this.trendsService.markProcessed(trend.id);
-        this.logger.log(`Pipeline complete. Instagram ID: ${publishResult.postId}`);
+        this.logger.log(`Pipeline complete. Published Instagram ID: ${publishResult.postId}`);
         setTimeout(() => {
           void this.analyticsService.syncPostByInstagramId(publishResult.postId!);
         }, 15000);
