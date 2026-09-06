@@ -1,6 +1,11 @@
 export default () => ({
   port: parseInt(process.env.PORT ?? '3000', 10) || 3000,
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  auth: {
+    jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-me',
+    adminEmail: process.env.ADMIN_EMAIL || 'admin@automation.local',
+    adminPassword: process.env.ADMIN_PASSWORD || 'Admin@12345',
+  },
   groq: {
     apiKey: process.env.GROQ_API_KEY,
     model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
